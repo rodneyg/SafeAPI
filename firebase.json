@@ -1,0 +1,37 @@
+{
+  "functions": {
+    "source": "packages/cloud/functions"
+  },
+  "firestore": {
+    "rules": "packages/cloud/firestore.rules",
+    "indexes": "packages/cloud/firestore.indexes.json"
+  },
+  "hosting": [
+    {
+      "target": "dashboard",
+      "public": "apps/dashboard/dist",
+      "ignore": ["**/.*", "**/node_modules/**"],
+      "rewrites": [
+        { "source": "/api/**", "function": "api" },
+        { "source": "**", "destination": "/index.html" }
+      ]
+    },
+    {
+      "target": "playground",
+      "public": "apps/playground/dist",
+      "ignore": ["**/.*", "**/node_modules/**"],
+      "rewrites": [
+        { "source": "/api/**", "function": "api" },
+        { "source": "**", "destination": "/index.html" }
+      ]
+    }
+  ],
+  "emulators": {
+    "functions": { "port": 5001 },
+    "firestore": { "port": 8080 },
+    "hosting": { "port": 5000 },
+    "auth": { "port": 9099 },
+    "singleProjectMode": true
+  }
+}
+

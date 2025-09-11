@@ -1,0 +1,18 @@
+{
+  "name": "safeapi-monorepo",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "build": "pnpm -r --filter ./packages/* run build && pnpm -r --filter ./apps/* run build",
+    "test": "pnpm -r --filter ./packages/* run test",
+    "dev:emulator": "cd packages/cloud && firebase emulators:start",
+    "deploy": "cd packages/cloud && firebase deploy",
+    "demo:sdk:node": "pnpm -C packages/sdk run demo:node",
+    "demo:web": "pnpm -C apps/playground run dev"
+  }
+}
+

@@ -1,0 +1,27 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Server-only collections
+    match /projects/{doc} { allow read, write: if false; }
+    match /apiKeys/{doc} { allow read, write: if false; }
+    match /usage_events/{doc} { allow read, write: if false; }
+    match /usage_counters/{doc} { allow read, write: if false; }
+    match /reports/{doc} { allow read, write: if false; }
+
+    // Audit & Consent: read for admins via custom claims; writes via Functions only
+    match /audit/{shard}/{doc} {
+      allow read: if request.auth.token.role == 'admin';
+      allow write: if false; // Functions only
+    }
+    match /consent/{subjectId}/{doc} {
+      allow read: if request.auth.token.role == 'admin';
+      allow write: if false; // Functions only
+    }
+
+    // Key-related: Functions only
+    match /users/{doc} { allow read, write: if false; }
+    match /escrow/{doc} { allow read, write: if false; }
+    match /docKeys/{doc} { allow read, write: if false; }
+  }
+}
+

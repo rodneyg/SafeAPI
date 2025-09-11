@@ -1,0 +1,12 @@
+node_modules
+dist
+lib
+.DS_Store
+.env
+*.local
+firebase-debug.log
+firebase-debug.*.log
+**/.vite
+**/.turbo
+**/.tsbuildinfo
+
