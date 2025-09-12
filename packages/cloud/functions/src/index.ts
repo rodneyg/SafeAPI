@@ -64,6 +64,10 @@ function signProjectToken(projectId: string) {
   return { token, expiresAt: exp };
 }
 
+async function handlePing(req: functions.https.Request, res: functions.Response) {
+  return res.status(200).json({ message: 'pong', timestamp: new Date().toISOString() });
+}
+
 async function handleAuthToken(req: functions.https.Request, res: functions.Response) {
   const apiKey = (req.headers['x-api-key'] || req.headers['X-API-Key']) as string | undefined;
   if (!apiKey) return res.status(401).json({ error: 'missing api key' });
@@ -215,6 +219,10 @@ export const api = functions.https.onRequest(async (req, res) => {
   corsHandler(req, res, async () => {
     try {
       const path = req.path.replace(/\/+$/, '');
+      
+      // Handle ping endpoint without authentication for deployment verification
+      if (path === '/ping' && req.method === 'GET') return handlePing(req, res);
+      
       if (path === '/v1/auth/token' && req.method === 'POST') return handleAuthToken(req, res);
 
       // Authn + basic rate limit
