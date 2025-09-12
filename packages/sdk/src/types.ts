@@ -1,4 +1,5 @@
 export type EncryptionMode = 'none' | 'field' | 'document';
+export type UXMode = 'user-managed' | 'shared-responsibility' | 'developer-managed' | 'api-managed';
 
 export interface StorageAdapter {
   create(p: { collection: string; encryptedDoc: Uint8Array; meta?: any }): Promise<string>;
@@ -13,10 +14,32 @@ export interface SafeAPIConfig {
   cloud?: { endpoint: string; apiKey: string; projectId: string };
   crypto?: { mode: 'client'; keystore?: 'indexeddb' | 'memory' };
   defaults?: { encryption: EncryptionMode; audit?: boolean; shareable?: boolean };
+  uxMode?: UXMode;
 }
 
 export interface KeyPair {
   publicKeyArmored: string;
   privateKeyArmored: string;
+}
+
+// UX Mode specific interfaces
+export interface UserManagedOptions {
+  backupMethod?: 'file' | 'manual' | 'qr';
+}
+
+export interface SharedResponsibilityOptions {
+  passphrase: string;
+  enableRecovery?: boolean;
+  escrowMetadata?: Record<string, any>;
+}
+
+export interface DeveloperManagedOptions {
+  autoEscrow?: boolean;
+  backgroundSync?: boolean;
+}
+
+export interface APIManagedOptions {
+  transparentMode?: boolean;
+  serverSideKeys?: boolean;
 }
 
