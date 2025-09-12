@@ -6,7 +6,8 @@ import * as openpgp from 'openpgp';
 
 export async function generateKeyPair(userId = 'user') {
   const { privateKey, publicKey } = await openpgp.generateKey({
-    type: 'ed25519',
+    type: 'ecc',
+    curve: 'curve25519',
     userIDs: [{ name: userId }],
   });
   return { publicKeyArmored: publicKey, privateKeyArmored: privateKey };
@@ -47,7 +48,18 @@ export async function unwrapKeyWithPGP(wrappedArmored: string, privateKeyArmored
   const privateKey = await openpgp.readPrivateKey({ armoredKey: privateKeyArmored });
   const message = await openpgp.readMessage({ armoredMessage: wrappedArmored });
   const { data } = await openpgp.decrypt({ message, decryptionKeys: privateKey });
-  const raw = typeof data === 'string' ? new Uint8Array(Buffer.from(data)) : new Uint8Array(data);
+  
+  // Convert data to proper BufferSource
+  let raw: BufferSource;
+  if (data instanceof Uint8Array) {
+    raw = data as BufferSource;
+  } else if (typeof data === 'string') {
+    raw = new TextEncoder().encode(data);
+  } else {
+    // For other types, convert via Buffer
+    raw = Buffer.from(data as any);
+  }
+  
   const key = await crypto.subtle.importKey('raw', raw, { name: 'AES-GCM' }, true, ['encrypt', 'decrypt']);
   return key;
 }
