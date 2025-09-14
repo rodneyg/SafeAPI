@@ -82,25 +82,108 @@ async function handleAuthToken(req: functions.https.Request, res: functions.Resp
 async function handleKeys(req: functions.https.Request, res: functions.Response, authed: Authed) {
   const { path } = req;
   const body = req.body || {};
+  
   if (path.endsWith('/register') && req.method === 'POST') {
     const { userId, publicKeyArmored } = body;
-    await db.collection('users').doc(userId).set({ publicKeyArmored }, { merge: true });
-    await recordUsage(authed.projectId, 'cloud_call', 1);
-    return res.status(204).end();
+    
+    // Validate input parameters
+    if (!userId || typeof userId !== 'string' || userId.trim().length === 0) {
+      return res.status(400).json({ error: 'invalid_user_id', message: 'User ID is required and must be a non-empty string' });
+    }
+    if (!publicKeyArmored || typeof publicKeyArmored !== 'string') {
+      return res.status(400).json({ error: 'invalid_public_key', message: 'Public key is required and must be a valid armored string' });
+    }
+    
+    try {
+      await db.collection('users').doc(userId).set({ publicKeyArmored }, { merge: true });
+      await recordUsage(authed.projectId, 'cloud_call', 1);
+      return res.status(204).end();
+    } catch (error: any) {
+      console.error('Public key registration failed:', { userId: userId.substring(0, 8) + '...', error: error.message });
+      return res.status(500).json({ error: 'registration_failed', message: 'Failed to register public key due to storage error' });
+    }
   }
+  
   if (path.endsWith('/escrow') && req.method === 'POST') {
     const { userId, encPrivKey } = body;
-    await db.collection('escrow').doc(userId).set({ encPrivKey, createdAt: admin.firestore.FieldValue.serverTimestamp() });
-    await recordUsage(authed.projectId, 'cloud_call', 1);
-    return res.status(204).end();
+    
+    // Validate input parameters
+    if (!userId || typeof userId !== 'string' || userId.trim().length === 0) {
+      return res.status(400).json({ error: 'invalid_user_id', message: 'User ID is required and must be a non-empty string' });
+    }
+    if (!encPrivKey || typeof encPrivKey !== 'string' || encPrivKey.trim().length === 0) {
+      return res.status(400).json({ error: 'invalid_encrypted_key', message: 'Encrypted private key is required and must be a non-empty string' });
+    }
+    
+    // Basic validation that the encrypted key looks like encrypted data (should not be plaintext)
+    if (encPrivKey.includes('BEGIN PGP PRIVATE KEY BLOCK') && !encPrivKey.includes('encrypted')) {
+      return res.status(400).json({ error: 'key_not_encrypted', message: 'Private key appears to be unencrypted - only encrypted keys can be stored in escrow' });
+    }
+    
+    try {
+      await db.collection('escrow').doc(userId).set({ 
+        encPrivKey, 
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        keyLength: encPrivKey.length 
+      });
+      await recordUsage(authed.projectId, 'cloud_call', 1);
+      return res.status(204).end();
+    } catch (error: any) {
+      console.error('Key escrow storage failed:', { userId: userId.substring(0, 8) + '...', keyLength: encPrivKey.length, error: error.message });
+      
+      // Provide specific error messages based on Firebase error codes
+      if (error.code === 'permission-denied') {
+        return res.status(403).json({ error: 'storage_permission_denied', message: 'Insufficient permissions to store encrypted key in escrow' });
+      } else if (error.code === 'deadline-exceeded' || error.code === 'unavailable') {
+        return res.status(503).json({ error: 'storage_unavailable', message: 'Key escrow storage temporarily unavailable - please retry' });
+      } else if (error.message && error.message.includes('document too large')) {
+        return res.status(413).json({ error: 'key_too_large', message: 'Encrypted private key exceeds maximum storage size limit' });
+      } else {
+        return res.status(500).json({ error: 'escrow_storage_failed', message: 'Failed to store encrypted private key due to backend error' });
+      }
+    }
   }
+  
   if (path.endsWith('/recover') && req.method === 'POST') {
     const { userId } = body;
-    const doc = await db.collection('escrow').doc(userId).get();
-    await recordUsage(authed.projectId, 'cloud_call', 1);
-    return res.json({ encPrivKey: doc.data()?.encPrivKey || null });
+    
+    // Validate input parameters
+    if (!userId || typeof userId !== 'string' || userId.trim().length === 0) {
+      return res.status(400).json({ error: 'invalid_user_id', message: 'User ID is required and must be a non-empty string' });
+    }
+    
+    try {
+      const doc = await db.collection('escrow').doc(userId).get();
+      
+      if (!doc.exists) {
+        return res.status(404).json({ error: 'key_not_found', message: 'No encrypted private key found in escrow for the specified user' });
+      }
+      
+      const data = doc.data();
+      const encPrivKey = data?.encPrivKey;
+      
+      if (!encPrivKey) {
+        console.error('Key recovery found document but missing encrypted key:', { userId: userId.substring(0, 8) + '...' });
+        return res.status(404).json({ error: 'key_data_missing', message: 'Encrypted private key data is missing from escrow record' });
+      }
+      
+      await recordUsage(authed.projectId, 'cloud_call', 1);
+      return res.json({ encPrivKey });
+    } catch (error: any) {
+      console.error('Key recovery failed:', { userId: userId.substring(0, 8) + '...', error: error.message });
+      
+      // Provide specific error messages based on Firebase error codes
+      if (error.code === 'permission-denied') {
+        return res.status(403).json({ error: 'recovery_permission_denied', message: 'Insufficient permissions to retrieve encrypted key from escrow' });
+      } else if (error.code === 'deadline-exceeded' || error.code === 'unavailable') {
+        return res.status(503).json({ error: 'storage_unavailable', message: 'Key escrow storage temporarily unavailable - please retry recovery' });
+      } else {
+        return res.status(500).json({ error: 'recovery_failed', message: 'Failed to retrieve encrypted private key due to backend error' });
+      }
+    }
   }
-  return res.status(404).json({ error: 'not found' });
+  
+  return res.status(404).json({ error: 'not_found', message: 'Endpoint not found' });
 }
 
 async function handleBroker(req: functions.https.Request, res: functions.Response, authed: Authed) {
@@ -217,6 +300,7 @@ async function handleAdmin(req: functions.https.Request, res: functions.Response
 
 export const api = functions.https.onRequest(async (req, res) => {
   corsHandler(req, res, async () => {
+    let authed: Authed | null = null;
     try {
       const path = req.path.replace(/\/+$/, '');
       
@@ -226,7 +310,7 @@ export const api = functions.https.onRequest(async (req, res) => {
       if (path === '/v1/auth/token' && req.method === 'POST') return handleAuthToken(req, res);
 
       // Authn + basic rate limit
-      const authed = parseAuth(req);
+      authed = parseAuth(req);
       if (!authed) return res.status(401).json({ error: 'unauthorized' });
       await checkRateLimit(authed.projectId).catch((e) => {
         throw new functions.https.HttpsError('resource-exhausted', (e as any).message || 'rate limited');
@@ -245,8 +329,26 @@ export const api = functions.https.onRequest(async (req, res) => {
       if (e instanceof functions.https.HttpsError) {
         return res.status(e.httpErrorCode.status).json({ error: e.message });
       }
-      console.error(e);
-      return res.status(500).json({ error: 'internal' });
+      
+      // Log error with context but don't expose sensitive details to client
+      console.error('API request failed:', { 
+        path: req.path, 
+        method: req.method, 
+        projectId: authed?.projectId,
+        error: e.message,
+        stack: e.stack 
+      });
+      
+      // Provide more specific error messages based on common error types
+      if (e.code === 'permission-denied') {
+        return res.status(403).json({ error: 'permission_denied', message: 'Insufficient permissions to access this resource' });
+      } else if (e.code === 'deadline-exceeded' || e.code === 'unavailable') {
+        return res.status(503).json({ error: 'service_unavailable', message: 'Backend service temporarily unavailable - please retry' });
+      } else if (e.code === 'invalid-argument') {
+        return res.status(400).json({ error: 'invalid_request', message: 'Invalid request parameters provided' });
+      } else {
+        return res.status(500).json({ error: 'internal_server_error', message: 'An unexpected error occurred while processing the request' });
+      }
     }
   });
 });
