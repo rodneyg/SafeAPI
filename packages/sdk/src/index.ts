@@ -7,7 +7,7 @@ if (typeof process !== 'undefined' && process.versions && process.versions.node)
   }
 }
 
-export type { EncryptionMode, SafeAPIConfig, StorageAdapter } from './types';
+export type { EncryptionMode, SafeAPIConfig, StorageAdapter, ConsentRecord, AuditLogEntry } from './types';
 export { SafeAPI } from './core/SafeAPI';
 export { FilesAdapter } from './adapters/FilesAdapter';
 export { FirebaseAdapter } from './adapters/FirebaseAdapter';
