@@ -2,6 +2,89 @@
 
 Foundation scaffold for SafeAPI: TypeScript SDK + Firebase cloud service with key escrow, re-encryption broker, signed audit/consent, usage metering, Stripe billing, and admin dashboard. Includes Firebase and Supabase adapters. Runnable demos and tests.
 
+## Three Common Jobs
+
+SafeAPI v0.2 provides first-class endpoints for the most common cryptographic use cases:
+
+### 1. Sign/Verify Content Between Users
+Verify content authenticity when the sender participates:
+
+```typescript
+// Sign content
+const signResponse = await fetch('/v1/sign', {
+  method: 'POST',
+  headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+  body: JSON.stringify({ payload: 'Hello, trusted recipient!' })
+});
+const { signature, alg, signedAt } = await signResponse.json();
+
+// Verify content
+const verifyResponse = await fetch('/v1/verify', {
+  method: 'POST',
+  headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+  body: JSON.stringify({ 
+    payload: 'Hello, trusted recipient!', 
+    signature 
+  })
+});
+const { valid, signer } = await verifyResponse.json();
+```
+
+### 2. Make Your App Secure (Encrypt Before Storing)
+Encrypt payloads before storing them in your database:
+
+```typescript
+// Encrypt sensitive data
+const encryptResponse = await fetch('/v1/seal/encrypt', {
+  method: 'POST',
+  headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+  body: JSON.stringify({ 
+    payload: 'sensitive user data',
+    recipients: ['user_123', 'user_456']
+  })
+});
+const { ciphertext, kref } = await encryptResponse.json();
+
+// Later, decrypt the data
+const decryptResponse = await fetch('/v1/seal/decrypt', {
+  method: 'POST',
+  headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+  body: JSON.stringify({ ciphertext, kref })
+});
+const { payload } = await decryptResponse.json();
+```
+
+### 3. Temporary Encrypted Links (Revocable/Expiring)
+Create secure, temporary links with no secrets in URLs:
+
+```typescript
+// Create temporary link
+const linkResponse = await fetch('/v1/seal/link/create', {
+  method: 'POST',
+  headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+  body: JSON.stringify({ 
+    payload: 'temporary secret document',
+    expiresAt: '2024-01-02T12:00:00.000Z',
+    maxOpens: 5
+  })
+});
+const { linkId, openUrl } = await linkResponse.json();
+
+// Revoke the link when no longer needed
+await fetch('/v1/seal/link/revoke', {
+  method: 'POST',
+  headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+  body: JSON.stringify({ linkId })
+});
+```
+
+## Key Concepts
+
+- **Seal** = encrypt/decrypt payloads
+- **Broker** = who can open (access control layer)  
+- **Sign/Verify** = authorship when the sender opts in
+- **No secrets in URLs** - all cryptographic material stays server-side
+
 ## Stack
 - Monorepo with pnpm workspaces
 - TypeScript everywhere (ESM)

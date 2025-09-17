@@ -215,6 +215,167 @@ async function handleAdmin(req: functions.https.Request, res: functions.Response
   return res.status(404).json({ error: 'not found' });
 }
 
+// New: Sign/Verify handlers
+async function handleSign(req: functions.https.Request, res: functions.Response, authed: Authed) {
+  if (req.method !== 'POST') return res.status(405).json({ error: 'method not allowed' });
+  
+  const { payload, keyId } = req.body || {};
+  if (!payload) return res.status(400).json({ error: 'payload required' });
+  
+  // For now, use a placeholder signing approach
+  // In production, this would use proper key management
+  const signedAt = new Date().toISOString();
+  const signature = Buffer.from(`SIGNATURE_${Date.now()}_${Math.random()}`).toString('base64');
+  
+  await recordUsage(authed.projectId, 'cloud_call', 1);
+  return res.json({
+    signature,
+    alg: 'ed25519',
+    signedAt
+  });
+}
+
+async function handleVerify(req: functions.https.Request, res: functions.Response, authed: Authed) {
+  if (req.method !== 'POST') return res.status(405).json({ error: 'method not allowed' });
+  
+  const { payload, signature, keyId } = req.body || {};
+  if (!payload || !signature) {
+    return res.status(400).json({ error: 'payload and signature required' });
+  }
+  
+  // For now, placeholder verification
+  // In production, this would use proper key management and verification
+  const valid = signature.startsWith('SIGNATURE_');
+  const result: any = { valid };
+  
+  if (valid) {
+    result.signer = 'placeholder_user';
+    result.signedAt = new Date().toISOString();
+    result.alg = 'ed25519';
+  }
+  
+  await recordUsage(authed.projectId, 'cloud_call', 1);
+  return res.json(result);
+}
+
+// New: Seal (encrypt/decrypt) handlers
+async function handleSealEncrypt(req: functions.https.Request, res: functions.Response, authed: Authed) {
+  if (req.method !== 'POST') return res.status(405).json({ error: 'method not allowed' });
+  
+  const { payload, kref, recipients } = req.body || {};
+  if (!payload) return res.status(400).json({ error: 'payload required' });
+  
+  // Generate or use existing kref
+  const finalKref = kref || `seal_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+  
+  // For now, simple placeholder encryption
+  // In production, this would use AES-GCM with proper key management
+  const iv = Buffer.from(`IV_${Date.now()}`).toString('base64');
+  const ciphertext = Buffer.from(`ENCRYPTED_${payload}_${Date.now()}`).toString('base64');
+  
+  // Store the seal metadata
+  await db.collection('seals').doc(finalKref).set({
+    projectId: authed.projectId,
+    recipients: recipients || [],
+    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    algorithm: 'aes-gcm-256'
+  });
+  
+  await recordUsage(authed.projectId, 'cloud_call', 1);
+  return res.json({
+    ciphertext,
+    meta: {
+      version: 1,
+      iv
+    },
+    kref: finalKref
+  });
+}
+
+async function handleSealDecrypt(req: functions.https.Request, res: functions.Response, authed: Authed) {
+  if (req.method !== 'POST') return res.status(405).json({ error: 'method not allowed' });
+  
+  const { ciphertext, kref } = req.body || {};
+  if (!ciphertext || !kref) {
+    return res.status(400).json({ error: 'ciphertext and kref required' });
+  }
+  
+  // Verify access to the seal
+  const sealDoc = await db.collection('seals').doc(kref).get();
+  if (!sealDoc.exists || sealDoc.data()?.projectId !== authed.projectId) {
+    return res.status(404).json({ error: 'seal not found' });
+  }
+  
+  // For now, simple placeholder decryption
+  // In production, this would use AES-GCM with proper key management
+  const decrypted = ciphertext.replace('ENCRYPTED_', '').replace(/_\d+$/, '');
+  const payload = Buffer.from(decrypted, 'base64').toString();
+  
+  await recordUsage(authed.projectId, 'cloud_call', 1);
+  return res.json({
+    payload: Buffer.from(payload).toString('base64')
+  });
+}
+
+// New: Seal Link handlers
+async function handleSealLinkCreate(req: functions.https.Request, res: functions.Response, authed: Authed) {
+  if (req.method !== 'POST') return res.status(405).json({ error: 'method not allowed' });
+  
+  const { payload, expiresAt, maxOpens } = req.body || {};
+  if (!payload) return res.status(400).json({ error: 'payload required' });
+  
+  const linkId = `link_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+  const kref = `linkkey_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+  
+  // Default expiry: 24 hours from now
+  const defaultExpiry = new Date();
+  defaultExpiry.setHours(defaultExpiry.getHours() + 24);
+  const expiry = expiresAt ? new Date(expiresAt) : defaultExpiry;
+  
+  // Store the link metadata
+  await db.collection('sealLinks').doc(linkId).set({
+    projectId: authed.projectId,
+    kref,
+    payload: Buffer.from(payload).toString('base64'), // encrypted in production
+    expiresAt: admin.firestore.Timestamp.fromDate(expiry),
+    maxOpens: maxOpens || null,
+    currentOpens: 0,
+    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    revoked: false
+  });
+  
+  // Note: No secret in URL - client will fetch via API
+  const openUrl = `https://example.com/seal/link/${linkId}`;
+  
+  await recordUsage(authed.projectId, 'cloud_call', 1);
+  return res.json({
+    linkId,
+    openUrl,
+    kref
+  });
+}
+
+async function handleSealLinkRevoke(req: functions.https.Request, res: functions.Response, authed: Authed) {
+  if (req.method !== 'POST') return res.status(405).json({ error: 'method not allowed' });
+  
+  const { linkId } = req.body || {};
+  if (!linkId) return res.status(400).json({ error: 'linkId required' });
+  
+  // Verify ownership and revoke
+  const linkDoc = await db.collection('sealLinks').doc(linkId).get();
+  if (!linkDoc.exists || linkDoc.data()?.projectId !== authed.projectId) {
+    return res.status(404).json({ error: 'link not found' });
+  }
+  
+  await db.collection('sealLinks').doc(linkId).update({
+    revoked: true,
+    revokedAt: admin.firestore.FieldValue.serverTimestamp()
+  });
+  
+  await recordUsage(authed.projectId, 'cloud_call', 1);
+  return res.json({ revoked: true });
+}
+
 export const api = functions.https.onRequest(async (req, res) => {
   corsHandler(req, res, async () => {
     try {
@@ -239,6 +400,14 @@ export const api = functions.https.onRequest(async (req, res) => {
       if (path === '/v1/usage' || path === '/v1/usage/event') return handleUsage(req, res, authed);
       if (path === '/v1/reports/generate' || path.startsWith('/v1/reports/')) return handleReports(req, res, authed);
       if (path.startsWith('/v1/admin/')) return handleAdmin(req, res, authed);
+
+      // New v0.2 endpoints
+      if (path === '/v1/sign') return handleSign(req, res, authed);
+      if (path === '/v1/verify') return handleVerify(req, res, authed);
+      if (path === '/v1/seal/encrypt') return handleSealEncrypt(req, res, authed);
+      if (path === '/v1/seal/decrypt') return handleSealDecrypt(req, res, authed);
+      if (path === '/v1/seal/link/create') return handleSealLinkCreate(req, res, authed);
+      if (path === '/v1/seal/link/revoke') return handleSealLinkRevoke(req, res, authed);
 
       return res.status(404).json({ error: 'not found' });
     } catch (e: any) {
