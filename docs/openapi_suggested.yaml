@@ -5,6 +5,11 @@ info:
     SafeAPI provides cryptographic primitives, key management, document encryption, 
     audit logging, and consent management via a secure cloud service built on Firebase.
     
+    **Seal** = encrypt/decrypt payloads.
+    **Broker** = who can open.
+    **Sign/Verify** = authorship when the sender opts in.
+    **No secrets in URLs.**
+    
     ## Authentication
     
     Most endpoints require JWT authentication obtained by exchanging an API key:
@@ -16,7 +21,7 @@ info:
     
     Default rate limit is 60 requests per minute per project. Limits are configurable
     and enforced in real-time with 429 responses when exceeded.
-  version: 0.1.0
+  version: 0.2.0
   contact:
     name: SafeAPI Support
     url: https://github.com/rodneyg/SafeAPI
@@ -102,11 +107,145 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
 
+  /v1/sign:
+    post:
+      tags: [Sign/Verify]
+      summary: Sign content with cryptographic signature
+      description: |
+        Create a cryptographic signature for content. The sender must have a SAFE key 
+        registered/managed by the project. Payload canonicalization uses exact bytes 
+        submitted by caller.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                payload:
+                  type: string
+                  description: Content to sign (base64 or UTF-8)
+                  example: "Hello, World!"
+                keyId:
+                  type: string
+                  description: Optional key identifier for signing
+                  example: "key_123"
+              required: [payload]
+      responses:
+        '200':
+          description: Content signed successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  signature:
+                    type: string
+                    format: base64
+                    description: Cryptographic signature
+                    example: "U0lHTkFUVVJFXzE3MDQ..."
+                  alg:
+                    type: string
+                    enum: [pgp, ed25519]
+                    description: Signature algorithm used
+                    example: "ed25519"
+                  signedAt:
+                    type: string
+                    format: date-time
+                    description: Timestamp when signature was created
+                    example: "2024-01-01T12:00:00.000Z"
+                required: [signature, alg, signedAt]
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    example: "payload required"
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /v1/verify:
+    post:
+      tags: [Sign/Verify]
+      summary: Verify cryptographic signature
+      description: |
+        Verify a cryptographic signature against content. Validates authorship 
+        when the sender participates in verification.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                payload:
+                  type: string
+                  description: Original content that was signed
+                  example: "Hello, World!"
+                signature:
+                  type: string
+                  description: Cryptographic signature to verify
+                  example: "U0lHTkFUVVJFXzE3MDQ..."
+                keyId:
+                  type: string
+                  description: Optional key identifier for verification
+                  example: "key_123"
+              required: [payload, signature]
+      responses:
+        '200':
+          description: Verification completed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  valid:
+                    type: boolean
+                    description: Whether the signature is valid
+                    example: true
+                  signer:
+                    type: string
+                    description: Identifier of the signer (if valid)
+                    example: "user_123"
+                  signedAt:
+                    type: string
+                    format: date-time
+                    description: Timestamp when signature was created (if valid)
+                    example: "2024-01-01T12:00:00.000Z"
+                  alg:
+                    type: string
+                    description: Signature algorithm used (if valid)
+                    example: "ed25519"
+                required: [valid]
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    example: "payload and signature required"
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
   /v1/keys/register:
     post:
       tags: [Key Management]
-      summary: Register user public key
-      description: Register a user's OpenPGP public key for encryption and verification
+      summary: Register user public key (optional)
+      description: |
+        **OPTIONAL ENDPOINT** - Register a user's OpenPGP public key for encryption and verification.
+        This endpoint is part of the legacy key management system and may not be required 
+        for all SafeAPI implementations.
       requestBody:
         required: true
         content:
@@ -134,8 +273,11 @@ paths:
   /v1/keys/escrow:
     post:
       tags: [Key Management]
-      summary: Store encrypted private key
-      description: Store an encrypted private key for account recovery purposes
+      summary: Store encrypted private key (optional)
+      description: |
+        **OPTIONAL ENDPOINT** - Store an encrypted private key for account recovery purposes.
+        This endpoint is part of the legacy key management system and may not be required 
+        for all SafeAPI implementations.
       requestBody:
         required: true
         content:
@@ -163,8 +305,11 @@ paths:
   /v1/keys/recover:
     post:
       tags: [Key Management]
-      summary: Recover escrowed private key
-      description: Retrieve previously escrowed encrypted private key
+      summary: Recover escrowed private key (optional)
+      description: |
+        **OPTIONAL ENDPOINT** - Retrieve previously escrowed encrypted private key.
+        This endpoint is part of the legacy key management system and may not be required 
+        for all SafeAPI implementations.
       requestBody:
         required: true
         content:
@@ -198,7 +343,7 @@ paths:
 
   /v1/broker/doc-key:
     post:
-      tags: [Document Keys]
+      tags: [Broker]
       summary: Generate document encryption key
       description: Create a new AES-GCM key for document encryption
       requestBody:
@@ -237,7 +382,7 @@ paths:
 
   /v1/broker/grant:
     post:
-      tags: [Document Keys]
+      tags: [Broker]
       summary: Grant key access to user
       description: Wrap document key for a specific user's access
       requestBody:
@@ -266,7 +411,7 @@ paths:
 
   /v1/broker/revoke:
     post:
-      tags: [Document Keys]
+      tags: [Broker]
       summary: Revoke user access
       description: Remove user's access to a document key
       requestBody:
@@ -295,7 +440,7 @@ paths:
 
   /v1/broker/rotate:
     post:
-      tags: [Document Keys]
+      tags: [Broker]
       summary: Mark key as rotated
       description: Mark a document key as rotated for security purposes
       requestBody:
@@ -313,6 +458,261 @@ paths:
       responses:
         '204':
           description: Key marked as rotated
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /v1/seal/encrypt:
+    post:
+      tags: [Seal]
+      summary: Encrypt payload (seal)
+      description: |
+        Encrypt a payload using AES-GCM. If kref is absent, API creates a per-doc key and returns it.
+        Recipients path delegates to Broker grants if provided.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                payload:
+                  type: string
+                  description: Content to encrypt (base64 or UTF-8)
+                  example: "sensitive data"
+                kref:
+                  type: string
+                  description: Optional key reference (new key created if absent)
+                  example: "seal_key_123"
+                recipients:
+                  type: array
+                  items:
+                    type: string
+                  description: Optional list of recipient user IDs
+                  example: ["user_123", "user_456"]
+              required: [payload]
+      responses:
+        '200':
+          description: Payload encrypted successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ciphertext:
+                    type: string
+                    format: base64
+                    description: Encrypted payload
+                    example: "RU5DUllQVEVEX3NlbnNpdGl2ZSBkYXRhXzE3MDQ..."
+                  meta:
+                    type: object
+                    properties:
+                      version:
+                        type: number
+                        description: Encryption format version
+                        example: 1
+                      iv:
+                        type: string
+                        format: base64
+                        description: Initialization vector
+                        example: "SVZfMTcwNDEwNDQwMA=="
+                    required: [version, iv]
+                  kref:
+                    type: string
+                    description: Key reference for decryption
+                    example: "seal_1704104400_abc123def"
+                required: [ciphertext, meta, kref]
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    example: "payload required"
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /v1/seal/decrypt:
+    post:
+      tags: [Seal]
+      summary: Decrypt payload (unseal)
+      description: Decrypt a payload using the provided key reference
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                ciphertext:
+                  type: string
+                  format: base64
+                  description: Encrypted payload to decrypt
+                  example: "RU5DUllQVEVEX3NlbnNpdGl2ZSBkYXRhXzE3MDQ..."
+                kref:
+                  type: string
+                  description: Key reference for decryption
+                  example: "seal_1704104400_abc123def"
+              required: [ciphertext, kref]
+      responses:
+        '200':
+          description: Payload decrypted successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  payload:
+                    type: string
+                    format: base64
+                    description: Decrypted payload
+                    example: "c2Vuc2l0aXZlIGRhdGE="
+                required: [payload]
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    example: "ciphertext and kref required"
+        '404':
+          description: Seal not found
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    example: "seal not found"
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /v1/seal/link/create:
+    post:
+      tags: [Seal]
+      summary: Create temporary encrypted link
+      description: |
+        Create a temporary, revocable link to encrypted content. Secrets stay server-side;
+        client fetch path unwraps via kref. No secrets in URLs.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                payload:
+                  type: string
+                  description: Content to make available via link
+                  example: "temporary secret document"
+                expiresAt:
+                  type: string
+                  format: date-time
+                  description: Optional expiration time (default: 24 hours)
+                  example: "2024-01-02T12:00:00.000Z"
+                maxOpens:
+                  type: number
+                  description: Optional maximum number of opens
+                  example: 5
+              required: [payload]
+      responses:
+        '200':
+          description: Link created successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  linkId:
+                    type: string
+                    description: Unique link identifier
+                    example: "link_1704104400_xyz789abc"
+                  openUrl:
+                    type: string
+                    description: URL to access the link (no secrets embedded)
+                    example: "https://example.com/seal/link/link_1704104400_xyz789abc"
+                  kref:
+                    type: string
+                    description: Key reference for the encrypted content
+                    example: "linkkey_1704104400_def456ghi"
+                required: [linkId, openUrl, kref]
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    example: "payload required"
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /v1/seal/link/revoke:
+    post:
+      tags: [Seal]
+      summary: Revoke temporary encrypted link
+      description: Permanently revoke access to a temporary encrypted link
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                linkId:
+                  type: string
+                  description: Link identifier to revoke
+                  example: "link_1704104400_xyz789abc"
+              required: [linkId]
+      responses:
+        '200':
+          description: Link revoked successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  revoked:
+                    type: boolean
+                    description: Confirmation of revocation
+                    example: true
+                required: [revoked]
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    example: "linkId required"
+        '404':
+          description: Link not found
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    example: "link not found"
         '401':
           $ref: '#/components/responses/Unauthorized'
         '429':
@@ -789,10 +1189,14 @@ tags:
     description: Service health and status endpoints
   - name: Authentication  
     description: API key exchange and JWT token management
+  - name: Sign/Verify
+    description: Content signing and signature verification for authorship
+  - name: Seal
+    description: Payload encryption/decryption and temporary encrypted links
   - name: Key Management
-    description: OpenPGP key registration, escrow, and recovery
-  - name: Document Keys
-    description: AES-GCM document encryption key management and sharing
+    description: OpenPGP key registration, escrow, and recovery (optional)
+  - name: Broker
+    description: AES-GCM document encryption key management and access control
   - name: Audit
     description: Cryptographically signed audit event logging
   - name: Consent

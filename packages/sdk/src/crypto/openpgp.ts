@@ -6,7 +6,8 @@ import * as openpgp from 'openpgp';
 
 export async function generateKeyPair(userId = 'user') {
   const { privateKey, publicKey } = await openpgp.generateKey({
-    type: 'ed25519',
+    type: 'ecc',
+    curve: 'ed25519',
     userIDs: [{ name: userId }],
   });
   return { publicKeyArmored: publicKey, privateKeyArmored: privateKey };
@@ -50,5 +51,91 @@ export async function unwrapKeyWithPGP(wrappedArmored: string, privateKeyArmored
   const raw = typeof data === 'string' ? new Uint8Array(Buffer.from(data)) : new Uint8Array(data);
   const key = await crypto.subtle.importKey('raw', raw, { name: 'AES-GCM' }, true, ['encrypt', 'decrypt']);
   return key;
+}
+
+// Sign content with PGP
+export async function signContentPGP(payload: string, privateKeyArmored: string) {
+  const privateKey = await openpgp.readPrivateKey({ armoredKey: privateKeyArmored });
+  const message = await openpgp.createMessage({ text: payload });
+  const signature = await openpgp.sign({
+    message,
+    signingKeys: privateKey,
+    detached: true
+  });
+  return signature;
+}
+
+// Verify content with PGP signature
+export async function verifyContentPGP(payload: string, signature: string, publicKeyArmored: string) {
+  try {
+    const publicKey = await openpgp.readKey({ armoredKey: publicKeyArmored });
+    const message = await openpgp.createMessage({ text: payload });
+    const signatureObj = await openpgp.readSignature({ armoredSignature: signature });
+    
+    const verificationResult = await openpgp.verify({
+      message,
+      signature: signatureObj,
+      verificationKeys: publicKey
+    });
+
+    const isValid = verificationResult.signatures.length > 0 && 
+                    await verificationResult.signatures[0].verified;
+    
+    return {
+      valid: isValid,
+      keyID: verificationResult.signatures[0]?.keyID?.toHex(),
+      signature: verificationResult.signatures[0]
+    };
+  } catch (error) {
+    // If verification throws an error, it means the signature is invalid
+    return {
+      valid: false,
+      keyID: undefined,
+      signature: undefined
+    };
+  }
+}
+
+// Sign content with Ed25519 (direct)
+export async function signContentEd25519(payload: string, privateKeyEd25519: Uint8Array) {
+  const encoder = new TextEncoder();
+  const data = encoder.encode(payload);
+  
+  // Import Ed25519 private key for signing
+  const key = await crypto.subtle.importKey(
+    'raw',
+    privateKeyEd25519,
+    {
+      name: 'Ed25519',
+    },
+    false,
+    ['sign']
+  );
+  
+  const signature = await crypto.subtle.sign('Ed25519', key, data);
+  return {
+    signature: new Uint8Array(signature),
+    algorithm: 'ed25519'
+  };
+}
+
+// Verify content with Ed25519 signature
+export async function verifyContentEd25519(payload: string, signature: Uint8Array, publicKeyEd25519: Uint8Array) {
+  const encoder = new TextEncoder();
+  const data = encoder.encode(payload);
+  
+  // Import Ed25519 public key for verification
+  const key = await crypto.subtle.importKey(
+    'raw',
+    publicKeyEd25519,
+    {
+      name: 'Ed25519',
+    },
+    false,
+    ['verify']
+  );
+  
+  const valid = await crypto.subtle.verify('Ed25519', key, signature, data);
+  return { valid };
 }
 
