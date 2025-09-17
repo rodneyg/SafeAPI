@@ -1,0 +1,805 @@
+openapi: 3.0.3
+info:
+  title: SafeAPI - SAFE Primitives as a Service
+  description: |
+    SafeAPI provides cryptographic primitives, key management, document encryption, 
+    audit logging, and consent management via a secure cloud service built on Firebase.
+    
+    ## Authentication
+    
+    Most endpoints require JWT authentication obtained by exchanging an API key:
+    1. Obtain API key from project dashboard
+    2. Exchange for JWT token via `/v1/auth/token`
+    3. Include JWT in Authorization header for subsequent requests
+    
+    ## Rate Limiting
+    
+    Default rate limit is 60 requests per minute per project. Limits are configurable
+    and enforced in real-time with 429 responses when exceeded.
+  version: 0.1.0
+  contact:
+    name: SafeAPI Support
+    url: https://github.com/rodneyg/SafeAPI
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+
+servers:
+  - url: https://{region}-{project}.cloudfunctions.net/api
+    description: Firebase Cloud Functions endpoint
+    variables:
+      region:
+        default: us-central1
+        description: Firebase region
+      project:
+        default: your-project-id
+        description: Firebase project ID
+  - url: http://localhost:5001/{project}/{region}/api
+    description: Local Firebase emulator
+    variables:
+      project:
+        default: demo-project
+        description: Firebase project ID for emulator
+      region:
+        default: us-central1
+        description: Firebase region for emulator
+
+security:
+  - BearerAuth: []
+  - ApiKeyAuth: []
+
+paths:
+  /ping:
+    get:
+      tags: [Health]
+      summary: Health check endpoint
+      description: Simple health check to verify service availability
+      security: []
+      responses:
+        '200':
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: pong
+                  timestamp:
+                    type: string
+                    format: date-time
+                    example: "2024-01-01T12:00:00.000Z"
+                required: [message, timestamp]
+
+  /v1/auth/token:
+    post:
+      tags: [Authentication]
+      summary: Exchange API key for JWT token
+      description: |
+        Exchange a project API key for a short-lived JWT token. The JWT token
+        is valid for 30 minutes and should be used for all subsequent API calls.
+      security:
+        - ApiKeyAuth: []
+      responses:
+        '200':
+          description: JWT token issued successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  token:
+                    type: string
+                    description: JWT token for authentication
+                    example: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+                  expiresAt:
+                    type: string
+                    format: date-time
+                    description: Token expiration timestamp
+                    example: "2024-01-01T12:30:00.000Z"
+                required: [token, expiresAt]
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /v1/keys/register:
+    post:
+      tags: [Key Management]
+      summary: Register user public key
+      description: Register a user's OpenPGP public key for encryption and verification
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                userId:
+                  type: string
+                  description: Unique user identifier
+                  example: "user_123"
+                publicKeyArmored:
+                  type: string
+                  description: OpenPGP public key in ASCII armor format
+                  example: "-----BEGIN PGP PUBLIC KEY BLOCK-----\n..."
+              required: [userId, publicKeyArmored]
+      responses:
+        '204':
+          description: Public key registered successfully
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /v1/keys/escrow:
+    post:
+      tags: [Key Management]
+      summary: Store encrypted private key
+      description: Store an encrypted private key for account recovery purposes
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                userId:
+                  type: string
+                  description: Unique user identifier
+                  example: "user_123"
+                encPrivKey:
+                  type: string
+                  description: Encrypted private key for recovery
+                  example: "encrypted_private_key_data"
+              required: [userId, encPrivKey]
+      responses:
+        '204':
+          description: Private key escrowed successfully
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /v1/keys/recover:
+    post:
+      tags: [Key Management]
+      summary: Recover escrowed private key
+      description: Retrieve previously escrowed encrypted private key
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                userId:
+                  type: string
+                  description: Unique user identifier
+                  example: "user_123"
+              required: [userId]
+      responses:
+        '200':
+          description: Encrypted private key retrieved
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  encPrivKey:
+                    type: string
+                    nullable: true
+                    description: Encrypted private key or null if not found
+                    example: "encrypted_private_key_data"
+                required: [encPrivKey]
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /v1/broker/doc-key:
+    post:
+      tags: [Document Keys]
+      summary: Generate document encryption key
+      description: Create a new AES-GCM key for document encryption
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                collection:
+                  type: string
+                  description: Document collection name
+                  example: "medical_records"
+                docId:
+                  type: string
+                  description: Document identifier
+                  example: "doc_456"
+              required: [collection, docId]
+      responses:
+        '200':
+          description: Document key created successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  kref:
+                    type: string
+                    description: Key reference for future operations
+                    example: "k_medical_records_doc_456"
+                required: [kref]
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /v1/broker/grant:
+    post:
+      tags: [Document Keys]
+      summary: Grant key access to user
+      description: Wrap document key for a specific user's access
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                kref:
+                  type: string
+                  description: Key reference from doc-key creation
+                  example: "k_medical_records_doc_456"
+                recipientUserId:
+                  type: string
+                  description: User ID to grant access to
+                  example: "user_789"
+              required: [kref, recipientUserId]
+      responses:
+        '204':
+          description: Access granted successfully
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /v1/broker/revoke:
+    post:
+      tags: [Document Keys]
+      summary: Revoke user access
+      description: Remove user's access to a document key
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                kref:
+                  type: string
+                  description: Key reference
+                  example: "k_medical_records_doc_456"
+                userId:
+                  type: string
+                  description: User ID to revoke access from
+                  example: "user_789"
+              required: [kref, userId]
+      responses:
+        '204':
+          description: Access revoked successfully
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /v1/broker/rotate:
+    post:
+      tags: [Document Keys]
+      summary: Mark key as rotated
+      description: Mark a document key as rotated for security purposes
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                kref:
+                  type: string
+                  description: Key reference to rotate
+                  example: "k_medical_records_doc_456"
+              required: [kref]
+      responses:
+        '204':
+          description: Key marked as rotated
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /v1/audit:
+    post:
+      tags: [Audit]
+      summary: Log audit event
+      description: Record an audit event with cryptographic signature
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                action:
+                  type: string
+                  enum: [WRITE, READ, UPDATE, DELETE]
+                  description: Action being audited
+                  example: "READ"
+                resource:
+                  type: object
+                  properties:
+                    type:
+                      type: string
+                      description: Resource type
+                      example: "document"
+                    id:
+                      type: string
+                      description: Resource identifier
+                      example: "doc_123"
+                  required: [type]
+                meta:
+                  type: object
+                  description: Additional metadata
+                  additionalProperties: true
+                  example: { "userId": "user_123", "ip": "192.168.1.1" }
+              required: [action, resource]
+      responses:
+        '200':
+          description: Audit event logged successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                    description: Unique audit event ID
+                    example: "audit_789"
+                  sig:
+                    type: string
+                    description: Cryptographic signature
+                    example: "SIGNATURE_PLACEHOLDER"
+                required: [id, sig]
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+    get:
+      tags: [Audit]
+      summary: Retrieve audit events
+      description: Get recent audit events for the current project
+      responses:
+        '200':
+          description: Audit events retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    id:
+                      type: string
+                      description: Unique audit event ID
+                    action:
+                      type: string
+                      description: Action that was audited
+                    resource:
+                      type: object
+                      description: Resource that was accessed
+                    ts:
+                      type: number
+                      description: Timestamp (Unix milliseconds)
+                    sig:
+                      type: string
+                      description: Cryptographic signature
+                    projectId:
+                      type: string
+                      description: Project that owns the event
+                  required: [id, action, resource, ts, sig, projectId]
+                example:
+                  - id: "audit_789"
+                    action: "READ"
+                    resource: { type: "document", id: "doc_123" }
+                    ts: 1704110400000
+                    sig: "SIGNATURE_PLACEHOLDER"
+                    projectId: "proj_123"
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /v1/consent:
+    post:
+      tags: [Consent]
+      summary: Record consent decision
+      description: Record a user's consent decision with cryptographic proof
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                subjectId:
+                  type: string
+                  description: Subject user identifier
+                  example: "user_123"
+                type:
+                  type: string
+                  description: Type of consent
+                  example: "data_processing"
+                granted:
+                  type: boolean
+                  description: Whether consent was granted
+                  example: true
+                method:
+                  type: string
+                  description: Method of consent collection
+                  example: "web_form"
+              required: [subjectId, type, granted]
+      responses:
+        '200':
+          description: Consent recorded successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                    description: Unique consent record ID
+                    example: "consent_456"
+                  sig:
+                    type: string
+                    description: Cryptographic signature
+                    example: "SIGN_PLACEHOLDER"
+                required: [id, sig]
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /v1/consent/{subjectId}:
+    get:
+      tags: [Consent]
+      summary: Get consent history
+      description: Retrieve consent history for a specific subject
+      parameters:
+        - name: subjectId
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Subject user identifier
+          example: "user_123"
+      responses:
+        '200':
+          description: Consent history retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    subjectId:
+                      type: string
+                      description: Subject user identifier
+                    type:
+                      type: string
+                      description: Type of consent
+                    granted:
+                      type: boolean
+                      description: Whether consent was granted
+                    method:
+                      type: string
+                      description: Method of consent collection
+                    ts:
+                      type: number
+                      description: Timestamp (Unix milliseconds)
+                    sig:
+                      type: string
+                      description: Cryptographic signature
+                    projectId:
+                      type: string
+                      description: Project that owns the record
+                  required: [subjectId, type, granted, ts, sig, projectId]
+                example:
+                  - subjectId: "user_123"
+                    type: "data_processing"
+                    granted: true
+                    method: "web_form"
+                    ts: 1704110400000
+                    sig: "SIGN_PLACEHOLDER"
+                    projectId: "proj_123"
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /v1/usage/event:
+    post:
+      tags: [Usage]
+      summary: Record usage event
+      description: Manually record a usage event for billing and analytics
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                feature:
+                  type: string
+                  description: Feature name being metered
+                  example: "document_encryption"
+                inc:
+                  type: number
+                  description: Increment amount (default 1)
+                  example: 5
+              required: [feature]
+      responses:
+        '204':
+          description: Usage event recorded successfully
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /v1/usage:
+    get:
+      tags: [Usage]
+      summary: Get usage counters
+      description: Retrieve usage statistics for the current project
+      responses:
+        '200':
+          description: Usage counters retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  byFeature:
+                    type: object
+                    additionalProperties:
+                      type: number
+                    description: Usage counts by feature
+                    example:
+                      cloud_call: 150
+                      document_encryption: 25
+                  byDay:
+                    type: object
+                    additionalProperties:
+                      type: object
+                      additionalProperties:
+                        type: number
+                    description: Usage counts by day and feature
+                    example:
+                      "2024-01-01":
+                        cloud_call: 100
+                        document_encryption: 20
+                required: [byFeature, byDay]
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /v1/reports/generate:
+    post:
+      tags: [Reports]
+      summary: Generate compliance report
+      description: Request generation of a compliance report
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                standard:
+                  type: string
+                  description: Compliance standard (e.g., GDPR, HIPAA)
+                  example: "GDPR"
+                range:
+                  type: string
+                  description: Date range for the report
+                  example: "2024-01-01,2024-01-31"
+              required: [standard, range]
+      responses:
+        '200':
+          description: Report generation initiated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  reportId:
+                    type: string
+                    description: Unique report identifier
+                    example: "report_789"
+                required: [reportId]
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /v1/reports/{reportId}:
+    get:
+      tags: [Reports]
+      summary: Get report status
+      description: Check the status of a generated report
+      parameters:
+        - name: reportId
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Report identifier
+          example: "report_789"
+      responses:
+        '200':
+          description: Report status retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  projectId:
+                    type: string
+                    description: Project that owns the report
+                  standard:
+                    type: string
+                    description: Compliance standard
+                  range:
+                    type: string
+                    description: Date range
+                  status:
+                    type: string
+                    enum: [pending, ready, failed]
+                    description: Report generation status
+                  urlSigned:
+                    type: string
+                    description: Signed URL for downloading the report
+                  ts:
+                    type: number
+                    description: Generation timestamp
+                required: [projectId, status]
+                example:
+                  projectId: "proj_123"
+                  standard: "GDPR"
+                  range: "2024-01-01,2024-01-31"
+                  status: "ready"
+                  urlSigned: "https://example.com/report/report_789"
+                  ts: 1704110400000
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /v1/admin/limits:
+    get:
+      tags: [Admin]
+      summary: Get project rate limits
+      description: Retrieve current rate limits and quotas for the project
+      responses:
+        '200':
+          description: Rate limits retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  limits:
+                    type: object
+                    nullable: true
+                    properties:
+                      cloudCallsPerMin:
+                        type: number
+                        description: Maximum API calls per minute
+                        example: 60
+                      storageGB:
+                        type: number
+                        description: Maximum storage in GB
+                        example: 100
+                    example:
+                      cloudCallsPerMin: 60
+                      storageGB: 100
+                required: [limits]
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: JWT token obtained from /v1/auth/token endpoint
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: Project API key for token exchange
+
+  responses:
+    Unauthorized:
+      description: Authentication failed
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              error:
+                type: string
+                example: "unauthorized"
+            required: [error]
+
+    RateLimited:
+      description: Rate limit exceeded
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              error:
+                type: string
+                example: "rate limited"
+            required: [error]
+
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              error:
+                type: string
+                example: "not found"
+            required: [error]
+
+    InternalError:
+      description: Internal server error
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              error:
+                type: string
+                example: "internal"
+            required: [error]
+
+tags:
+  - name: Health
+    description: Service health and status endpoints
+  - name: Authentication  
+    description: API key exchange and JWT token management
+  - name: Key Management
+    description: OpenPGP key registration, escrow, and recovery
+  - name: Document Keys
+    description: AES-GCM document encryption key management and sharing
+  - name: Audit
+    description: Cryptographically signed audit event logging
+  - name: Consent
+    description: GDPR-compliant consent recording and management
+  - name: Usage
+    description: Usage tracking and billing metrics
+  - name: Reports
+    description: Compliance and audit report generation
+  - name: Admin
+    description: Project administration and configuration
