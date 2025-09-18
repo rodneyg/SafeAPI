@@ -35,6 +35,70 @@ export async function decryptJsonAesGcm(encrypted: Uint8Array, key: CryptoKey) {
 }
 
 // Wrap/unwrap AES key using recipient PGP
+
+/**
+ * Wraps an AES-GCM document encryption key using OpenPGP for secure sharing in the re-encryption broker.
+ * 
+ * This function is a core component of SafeAPI's secure document sharing system. It encrypts
+ * an AES-GCM key (used for document encryption) with a recipient's PGP public key, enabling
+ * secure key distribution without exposing the plaintext key material. The wrapped key can
+ * only be unwrapped by the intended recipient using their corresponding private key.
+ * 
+ * **Security Notes:**
+ * - The original AES key remains secure and is never transmitted in plaintext
+ * - Uses OpenPGP asymmetric encryption with Ed25519/Curve25519 key pairs
+ * - Suitable for Firebase-based backend services handling sensitive document keys
+ * - Part of the re-encryption broker pattern for secure multi-party document access
+ * 
+ * @param aesKey - The AES-GCM CryptoKey (256-bit) used for document encryption.
+ *                 Must be extractable and support encrypt/decrypt operations.
+ * @param recipientPublicKeyArmored - The recipient's PGP public key in ASCII-armored format.
+ *                                   Should be a valid Ed25519 public key string.
+ * 
+ * @returns Promise<string> - The wrapped key as an ASCII-armored PGP message string.
+ *                           This can be safely stored or transmitted and later unwrapped
+ *                           by the recipient using their private key.
+ * 
+ * @throws {Error} When the AES key cannot be exported (e.g., not extractable)
+ * @throws {Error} When the recipient public key is invalid or cannot be parsed
+ * @throws {Error} When OpenPGP encryption fails
+ * 
+ * @example
+ * ```typescript
+ * // Generate a document encryption key
+ * const { encrypted, key } = await encryptJsonAesGcm({ sensitive: "data" });
+ * 
+ * // Wrap the key for sharing with a recipient
+ * const recipientPubKey = "-----BEGIN PGP PUBLIC KEY BLOCK-----...";
+ * const wrappedKey = await wrapKeyWithPGP(key, recipientPubKey);
+ * 
+ * // Store wrapped key in Firebase for recipient access
+ * await firestore.collection('wrapped_keys').add({
+ *   recipient: recipientUserId,
+ *   documentId: docId,
+ *   wrappedKey: wrappedKey,
+ *   timestamp: Date.now()
+ * });
+ * ```
+ * 
+ * @example
+ * ```typescript
+ * // Re-encryption broker usage pattern
+ * async function grantDocumentAccess(docId: string, recipientId: string) {
+ *   // Retrieve document's AES key (from secure storage)
+ *   const documentKey = await getDocumentKey(docId);
+ *   
+ *   // Get recipient's public key
+ *   const recipientKey = await getUserPublicKey(recipientId);
+ *   
+ *   // Wrap key for secure sharing
+ *   const wrapped = await wrapKeyWithPGP(documentKey, recipientKey);
+ *   
+ *   // Store in key broker for recipient access
+ *   await storeWrappedKey(docId, recipientId, wrapped);
+ * }
+ * ```
+ */
 export async function wrapKeyWithPGP(aesKey: CryptoKey, recipientPublicKeyArmored: string) {
   const raw = new Uint8Array(await crypto.subtle.exportKey('raw', aesKey));
   const publicKey = await openpgp.readKey({ armoredKey: recipientPublicKeyArmored });
