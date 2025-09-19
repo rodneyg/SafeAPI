@@ -34,14 +34,20 @@ export class DataCore {
         protectedObj[f as string] = (p.doc as any)[f as string];
         delete partial[f as string];
       }
-      const { encrypted: enc, key: k } = await encryptJsonAesGcm(protectedObj);
+      const { encrypted: enc, key: k } = await encryptJsonAesGcm(protectedObj, { 
+        contentType: 'application/json',
+        metadata: { mode: 'field', fields: fields.map(String) }
+      });
       key = k;
       encrypted = enc;
       (partial.__mode = 'field'), (partial.__iv = null), (partial.__blob = Array.from(enc));
       // we embed the encrypted blob in the record for demo adapter
       encrypted = new TextEncoder().encode(JSON.stringify(partial));
     } else {
-      const r = await encryptJsonAesGcm(p.doc);
+      const r = await encryptJsonAesGcm(p.doc, {
+        contentType: 'application/json',
+        metadata: { mode: 'document', collection: p.collection }
+      });
       encrypted = r.encrypted;
       key = r.key;
     }
@@ -82,12 +88,19 @@ export class DataCore {
         protectedObj[f as string] = (p.doc as any)[f as string];
         delete partial[f as string];
       }
-      const r = await encryptJsonAesGcm(protectedObj);
+      const r = await encryptJsonAesGcm(protectedObj, {
+        contentType: 'application/json',
+        metadata: { mode: 'field', fields: fields.map(String) }
+      });
       encrypted = new TextEncoder().encode(JSON.stringify({ ...partial, __mode: 'field', __blob: Array.from(r.encrypted) }));
       key = r.key;
     } else {
-      if (!key) key = (await encryptJsonAesGcm({})).key; // ensure key
-      const r = await encryptJsonAesGcm(p.doc, key);
+      if (!key) key = (await encryptJsonAesGcm({}, { contentType: 'application/json' })).key; // ensure key
+      const r = await encryptJsonAesGcm(p.doc, { 
+        key,
+        contentType: 'application/json',
+        metadata: { mode: 'document', collection: p.collection, id: p.id }
+      });
       encrypted = r.encrypted;
     }
     await this.storage.update({ collection: p.collection, id: p.id, encryptedDoc: encrypted });

@@ -3,6 +3,7 @@
 // - OpenPGP for keypair and wrapping doc keys for sharing
 
 import * as openpgp from 'openpgp';
+import type { EncryptionOptions } from '../types';
 
 export async function generateKeyPair(userId = 'user') {
   const { privateKey, publicKey } = await openpgp.generateKey({
@@ -13,17 +14,29 @@ export async function generateKeyPair(userId = 'user') {
 }
 
 // AES-GCM JSON encrypt/decrypt (UTF-8 JSON)
-export async function encryptJsonAesGcm(obj: any, key?: CryptoKey) {
+export async function encryptJsonAesGcm(obj: any, options?: EncryptionOptions) {
+  const opts = options || {};
+  const algorithm = opts.algorithm || 'AES-GCM';
+  const keyLength = opts.keyLength || 256;
+  
   const data = new TextEncoder().encode(JSON.stringify(obj));
-  const k = key || (await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, true, ['encrypt', 'decrypt']));
+  const k = opts.key || (await crypto.subtle.generateKey({ name: algorithm, length: keyLength }, true, ['encrypt', 'decrypt']));
   const iv = crypto.getRandomValues(new Uint8Array(12));
-  const cipher = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, k, data));
+  const cipher = new Uint8Array(await crypto.subtle.encrypt({ name: algorithm, iv }, k, data));
+  
   // Serialize: [version(1), iv(12), ciphertext]
   const out = new Uint8Array(1 + 12 + cipher.length);
   out[0] = 1; // version
   out.set(iv, 1);
   out.set(cipher, 13);
-  return { encrypted: out, key: k, iv };
+  
+  return { 
+    encrypted: out, 
+    key: k, 
+    iv,
+    contentType: opts.contentType,
+    metadata: opts.metadata
+  };
 }
 
 export async function decryptJsonAesGcm(encrypted: Uint8Array, key: CryptoKey) {

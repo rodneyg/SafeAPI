@@ -20,3 +20,16 @@ export interface KeyPair {
   privateKeyArmored: string;
 }
 
+export interface EncryptionOptions {
+  /** MIME type or format identifier for the content being encrypted */
+  contentType?: string;
+  /** Additional metadata to associate with the encrypted content */
+  metadata?: Record<string, any>;
+  /** Optional pre-existing CryptoKey for encryption */
+  key?: CryptoKey;
+  /** Encryption algorithm (default: 'AES-GCM') */
+  algorithm?: string;
+  /** Key length in bits (default: 256) */
+  keyLength?: number;
+}
+
