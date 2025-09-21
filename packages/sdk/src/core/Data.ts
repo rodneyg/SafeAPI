@@ -113,5 +113,15 @@ export class DataCore {
     }
     return out;
   }
+
+  // Expose document key for sharing purposes
+  async getDocumentKey(collection: string, id: string): Promise<CryptoKey | null> {
+    return this.docKeys.get(this.keyFor(collection, id)) || null;
+  }
+
+  // Set document key (for when unwrapping shared keys)
+  async setDocumentKey(collection: string, id: string, key: CryptoKey): Promise<void> {
+    this.docKeys.set(this.keyFor(collection, id), key);
+  }
 }
 

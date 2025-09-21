@@ -27,7 +27,11 @@ export class SafeAPI {
     this.keys = new Keys({ keystore: cfg.crypto?.keystore || 'memory' });
     this.data = new DataCore(cfg.storage as StorageAdapter, { encryption: defaults.encryption });
     this.anon = new AnonCore(cfg.storage);
-    this.share = new ShareCore(this.cloudClient);
+    // Connect data and share cores for key sharing
+    this.share = new ShareCore(
+      this.cloudClient, 
+      (collection: string, id: string) => this.data.getDocumentKey(collection, id)
+    );
     this.audit = new AuditCore(this.cloudClient);
     this.consent = new ConsentCore(this.cloudClient);
     this.export = new ExportCore(cfg.storage);

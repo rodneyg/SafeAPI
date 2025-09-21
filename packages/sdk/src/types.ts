@@ -20,3 +20,21 @@ export interface KeyPair {
   privateKeyArmored: string;
 }
 
+export interface ShareRecipient {
+  userId: string;
+  email?: string;
+  publicKeyArmored?: string;
+}
+
+export interface ShareGroup {
+  groupId: string;
+  name: string;
+  members: ShareRecipient[];
+}
+
+export interface ShareOptions {
+  auditLog?: boolean;
+  expiresAt?: Date;
+  permissions?: ('read' | 'write' | 'share')[];
+}
+
