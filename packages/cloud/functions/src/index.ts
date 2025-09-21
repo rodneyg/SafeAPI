@@ -82,54 +82,201 @@ async function handleAuthToken(req: functions.https.Request, res: functions.Resp
 async function handleKeys(req: functions.https.Request, res: functions.Response, authed: Authed) {
   const { path } = req;
   const body = req.body || {};
+  
   if (path.endsWith('/register') && req.method === 'POST') {
     const { userId, publicKeyArmored } = body;
-    await db.collection('users').doc(userId).set({ publicKeyArmored }, { merge: true });
-    await recordUsage(authed.projectId, 'cloud_call', 1);
+    await db.collection('users').doc(userId).set({ 
+      publicKeyArmored, 
+      projectId: authed.projectId,
+      registeredAt: admin.firestore.FieldValue.serverTimestamp()
+    }, { merge: true });
+    await recordUsage(authed.projectId, 'key_registration', 1);
     return res.status(204).end();
   }
+  
+  // New: Get public key for a user
+  if (path.endsWith('/public-key') && req.method === 'GET') {
+    const userId = req.query.userId as string;
+    if (!userId) {
+      return res.status(400).json({ error: 'userId parameter required' });
+    }
+    
+    const doc = await db.collection('users').doc(userId).get();
+    const publicKeyArmored = doc.data()?.publicKeyArmored || null;
+    
+    await recordUsage(authed.projectId, 'cloud_call', 1);
+    return res.json({ publicKeyArmored });
+  }
+  
+  // New: Bulk get public keys for multiple users
+  if (path.endsWith('/public-keys-bulk') && req.method === 'POST') {
+    const { userIds } = body;
+    if (!Array.isArray(userIds)) {
+      return res.status(400).json({ error: 'userIds array required' });
+    }
+    
+    const publicKeys: { [userId: string]: string | null } = {};
+    
+    // Batch fetch users
+    const userDocs = await Promise.all(
+      userIds.map(userId => db.collection('users').doc(userId).get())
+    );
+    
+    userDocs.forEach((doc, index) => {
+      const userId = userIds[index];
+      publicKeys[userId] = doc.data()?.publicKeyArmored || null;
+    });
+    
+    await recordUsage(authed.projectId, 'bulk_key_lookup', userIds.length);
+    return res.json({ publicKeys });
+  }
+  
   if (path.endsWith('/escrow') && req.method === 'POST') {
     const { userId, encPrivKey } = body;
-    await db.collection('escrow').doc(userId).set({ encPrivKey, createdAt: admin.firestore.FieldValue.serverTimestamp() });
-    await recordUsage(authed.projectId, 'cloud_call', 1);
+    await db.collection('escrow').doc(userId).set({ 
+      encPrivKey, 
+      projectId: authed.projectId,
+      createdAt: admin.firestore.FieldValue.serverTimestamp() 
+    });
+    await recordUsage(authed.projectId, 'key_escrow', 1);
     return res.status(204).end();
   }
+  
   if (path.endsWith('/recover') && req.method === 'POST') {
     const { userId } = body;
     const doc = await db.collection('escrow').doc(userId).get();
-    await recordUsage(authed.projectId, 'cloud_call', 1);
+    await recordUsage(authed.projectId, 'key_recovery', 1);
     return res.json({ encPrivKey: doc.data()?.encPrivKey || null });
   }
+  
   return res.status(404).json({ error: 'not found' });
 }
 
 async function handleBroker(req: functions.https.Request, res: functions.Response, authed: Authed) {
   const body = req.body || {};
+  
   if (req.path.endsWith('/doc-key') && req.method === 'POST') {
     const { collection, docId } = body;
     const kref = `k_${collection}_${docId}`;
-    await db.collection('docKeys').doc(kref).set({ alg: 'aes-gcm-256', createdAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+    await db.collection('docKeys').doc(kref).set({ 
+      alg: 'aes-gcm-256', 
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      projectId: authed.projectId
+    }, { merge: true });
     await recordUsage(authed.projectId, 'cloud_call', 1);
     return res.json({ kref });
   }
+  
   if (req.path.endsWith('/grant') && req.method === 'POST') {
     const { kref, recipientUserId } = body;
     await db.collection('docKeys').doc(kref).set({ [`wrapped.${recipientUserId}`]: 'WRAPPED_KEY_PLACEHOLDER' }, { merge: true });
     await recordUsage(authed.projectId, 'cloud_call', 1);
     return res.status(204).end();
   }
+  
+  // New: Bulk grant with actual wrapped keys
+  if (req.path.endsWith('/grant-bulk') && req.method === 'POST') {
+    const { kref, wrappedKeys, options } = body;
+    const updateData: any = {
+      lastGrantedAt: admin.firestore.FieldValue.serverTimestamp()
+    };
+    
+    // Store wrapped keys for each recipient
+    for (const [userId, wrappedKey] of Object.entries(wrappedKeys || {})) {
+      updateData[`wrapped.${userId}`] = wrappedKey;
+      if (options?.expiresAt) {
+        updateData[`expires.${userId}`] = new Date(options.expiresAt);
+      }
+      if (options?.permissions) {
+        updateData[`permissions.${userId}`] = options.permissions;
+      }
+    }
+    
+    await db.collection('docKeys').doc(kref).set(updateData, { merge: true });
+    await recordUsage(authed.projectId, 'share_grant', Object.keys(wrappedKeys || {}).length);
+    return res.status(204).end();
+  }
+  
+  // New: Get shares for a document
+  if (req.path.match(/\/doc-key\/([^\/]+)\/([^\/]+)\/shares$/) && req.method === 'GET') {
+    const match = req.path.match(/\/doc-key\/([^\/]+)\/([^\/]+)\/shares$/);
+    const [, collection, docId] = match!;
+    const kref = `k_${collection}_${docId}`;
+    
+    const doc = await db.collection('docKeys').doc(kref).get();
+    if (!doc.exists) {
+      return res.json({ users: [], groups: [] });
+    }
+    
+    const data = doc.data() || {};
+    const users = Object.keys(data.wrapped || {});
+    const groups = Object.keys(data.groupWrapped || {});
+    
+    await recordUsage(authed.projectId, 'cloud_call', 1);
+    return res.json({ users, groups });
+  }
+  
+  // New: Get wrapped key for current user
+  if (req.path.match(/\/doc-key\/([^\/]+)\/([^\/]+)\/wrapped-key$/) && req.method === 'GET') {
+    const match = req.path.match(/\/doc-key\/([^\/]+)\/([^\/]+)\/wrapped-key$/);
+    const [, collection, docId] = match!;
+    const kref = `k_${collection}_${docId}`;
+    
+    // TODO: Extract userId from JWT token
+    const userId = req.headers['x-user-id'] as string; // Temporary solution
+    if (!userId) {
+      return res.status(400).json({ error: 'User ID required' });
+    }
+    
+    const doc = await db.collection('docKeys').doc(kref).get();
+    if (!doc.exists) {
+      return res.status(404).json({ error: 'Document key not found' });
+    }
+    
+    const data = doc.data() || {};
+    const wrappedKey = data.wrapped?.[userId];
+    
+    await recordUsage(authed.projectId, 'cloud_call', 1);
+    return res.json({ wrappedKey: wrappedKey || null });
+  }
+  
   if (req.path.endsWith('/revoke') && req.method === 'POST') {
     const { kref, userId } = body;
-    await db.collection('docKeys').doc(kref).set({ [`wrapped.${userId}`]: admin.firestore.FieldValue.delete() }, { merge: true });
-    await recordUsage(authed.projectId, 'cloud_call', 1);
+    await db.collection('docKeys').doc(kref).set({ 
+      [`wrapped.${userId}`]: admin.firestore.FieldValue.delete(),
+      [`expires.${userId}`]: admin.firestore.FieldValue.delete(),
+      [`permissions.${userId}`]: admin.firestore.FieldValue.delete(),
+      lastRevokedAt: admin.firestore.FieldValue.serverTimestamp()
+    }, { merge: true });
+    await recordUsage(authed.projectId, 'share_revoke', 1);
     return res.status(204).end();
   }
+  
+  // New: Revoke group access
+  if (req.path.endsWith('/revoke-group') && req.method === 'POST') {
+    const { collection, docId, groupId } = body;
+    const kref = `k_${collection}_${docId}`;
+    
+    await db.collection('docKeys').doc(kref).set({ 
+      [`groupWrapped.${groupId}`]: admin.firestore.FieldValue.delete(),
+      lastRevokedAt: admin.firestore.FieldValue.serverTimestamp()
+    }, { merge: true });
+    await recordUsage(authed.projectId, 'share_revoke_group', 1);
+    return res.status(204).end();
+  }
+  
   if (req.path.endsWith('/rotate') && req.method === 'POST') {
     const { kref } = body;
-    await db.collection('docKeys').doc(kref).set({ rotatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
-    await recordUsage(authed.projectId, 'cloud_call', 1);
+    await db.collection('docKeys').doc(kref).set({ 
+      rotatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      // Clear all wrapped keys on rotation for security
+      wrapped: {},
+      groupWrapped: {}
+    }, { merge: true });
+    await recordUsage(authed.projectId, 'key_rotation', 1);
     return res.status(204).end();
   }
+  
   return res.status(404).json({ error: 'not found' });
 }
 

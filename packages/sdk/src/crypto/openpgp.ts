@@ -47,8 +47,11 @@ export async function wrapKeyWithPGP(aesKey: CryptoKey, recipientPublicKeyArmore
 export async function unwrapKeyWithPGP(wrappedArmored: string, privateKeyArmored: string) {
   const privateKey = await openpgp.readPrivateKey({ armoredKey: privateKeyArmored });
   const message = await openpgp.readMessage({ armoredMessage: wrappedArmored });
-  const { data } = await openpgp.decrypt({ message, decryptionKeys: privateKey });
-  const raw = typeof data === 'string' ? new Uint8Array(Buffer.from(data, 'binary')) : new Uint8Array(data as ArrayBuffer);
+  const { data } = await openpgp.decrypt({ message, decryptionKeys: privateKey, format: 'binary' });
+  
+  // Convert to Uint8Array properly
+  const raw = new Uint8Array(data as ArrayBuffer);
+  
   const key = await crypto.subtle.importKey('raw', raw, { name: 'AES-GCM' }, true, ['encrypt', 'decrypt']);
   return key;
 }
