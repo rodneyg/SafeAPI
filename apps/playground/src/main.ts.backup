@@ -1,0 +1,288 @@
+import { SafeAPI, FilesAdapter, Crypto } from '@safeapi/sdk';
+
+const el = (id: string) => document.getElementById(id)!;
+
+const ui = `
+  <h1>SafeAPI Multi-User Sharing Demo</h1>
+  <p>Demonstrates end-to-end encrypted document sharing between users. Adapter: <b>FilesAdapter</b></p>
+  
+  <div class="users-section">
+    <h2>Users</h2>
+    <div class="user-panels">
+      <div class="user-panel" id="alice-panel">
+        <h3>Alice (Document Owner)</h3>
+        <div>
+          <textarea id="alice-note" rows="3" placeholder="Create a shared document..."></textarea>
+          <button id="alice-create">Create & Share Document</button>
+        </div>
+        <div id="alice-keys" class="keys-info"></div>
+      </div>
+      
+      <div class="user-panel" id="bob-panel">
+        <h3>Bob (Recipient)</h3>
+        <div id="bob-content">No shared documents yet</div>
+        <div id="bob-keys" class="keys-info"></div>
+      </div>
+      
+      <div class="user-panel" id="charlie-panel">
+        <h3>Charlie (Recipient)</h3>
+        <div id="charlie-content">No shared documents yet</div>
+        <div id="charlie-keys" class="keys-info"></div>
+      </div>
+    </div>
+  </div>
+  
+  <div class="controls">
+    <button id="revoke-charlie">Revoke Charlie's Access</button>
+    <button id="add-david">Add David to Sharing</button>
+  </div>
+  
+  <div class="shared-docs">
+    <h2>Shared Documents</h2>
+    <ul id="documents-list"></ul>
+  </div>
+  
+  <style>
+    .user-panels { display: flex; gap: 20px; margin: 20px 0; }
+    .user-panel { 
+      border: 1px solid #ccc; 
+      padding: 15px; 
+      border-radius: 8px; 
+      flex: 1;
+      min-width: 250px;
+    }
+    .user-panel h3 { margin-top: 0; color: #333; }
+    .keys-info { 
+      font-family: monospace; 
+      font-size: 12px; 
+      color: #666; 
+      margin-top: 10px;
+      word-break: break-all;
+    }
+    .controls { margin: 20px 0; }
+    .controls button { margin-right: 10px; }
+    textarea { width: 100%; margin-bottom: 10px; }
+    button { padding: 8px 12px; cursor: pointer; }
+    #documents-list li { margin: 10px 0; padding: 10px; border: 1px solid #eee; border-radius: 4px; }
+    .error { color: red; }
+    .success { color: green; }
+  </style>
+`;
+
+document.getElementById('app')!.innerHTML = ui;
+
+// Initialize users with keypairs
+const users = {
+  alice: null as any,
+  bob: null as any,
+  charlie: null as any,
+  david: null as any
+};
+
+let currentDocument: {
+  id: string;
+  content: any;
+  documentKey: CryptoKey;
+  encrypted: Uint8Array;
+  iv: Uint8Array;
+  wrappedKeys: { userId: string; wrappedKey: string }[];
+} | null = null;
+
+async function initializeUsers() {
+  // Generate keypairs for all users
+  users.alice = await Crypto.generateKeyPair('alice');
+  users.bob = await Crypto.generateKeyPair('bob');
+  users.charlie = await Crypto.generateKeyPair('charlie');
+  users.david = await Crypto.generateKeyPair('david');
+  
+  // Display key info
+  el('alice-keys').innerHTML = `Public Key: ${users.alice.publicKeyArmored.substring(0, 50)}...`;
+  el('bob-keys').innerHTML = `Public Key: ${users.bob.publicKeyArmored.substring(0, 50)}...`;
+  el('charlie-keys').innerHTML = `Public Key: ${users.charlie.publicKeyArmored.substring(0, 50)}...`;
+}
+
+async function createAndShareDocument() {
+  const text = (el('alice-note') as HTMLTextAreaElement).value.trim();
+  if (!text) return;
+  
+  try {
+    // Create document content
+    const content = {
+      title: 'Shared Document',
+      text: text,
+      author: 'alice',
+      createdAt: new Date().toISOString(),
+      sharedWith: ['bob', 'charlie']
+    };
+    
+    // Generate document key and encrypt content
+    const documentKey = await Crypto.generateDocumentKey();
+    const { encrypted, iv } = await Crypto.encryptDocument(content, documentKey);
+    
+    // Wrap key for recipients (Bob and Charlie)
+    const recipients = [
+      { userId: 'bob', publicKeyArmored: users.bob.publicKeyArmored },
+      { userId: 'charlie', publicKeyArmored: users.charlie.publicKeyArmored }
+    ];
+    
+    const wrappedKeys = await Crypto.wrapKeyForMultipleRecipients(documentKey, recipients);
+    
+    // Store document state
+    currentDocument = {
+      id: 'doc-' + Date.now(),
+      content,
+      documentKey,
+      encrypted,
+      iv,
+      wrappedKeys
+    };
+    
+    // Clear input
+    (el('alice-note') as HTMLTextAreaElement).value = '';
+    
+    // Update UI
+    await updateRecipientsView();
+    updateDocumentsList();
+    
+    console.log('Document created and shared successfully!');
+  } catch (error) {
+    console.error('Error creating document:', error);
+  }
+}
+
+async function updateRecipientsView() {
+  if (!currentDocument) return;
+  
+  try {
+    // Bob's view
+    const bobWrappedKey = currentDocument.wrappedKeys.find(w => w.userId === 'bob')?.wrappedKey;
+    if (bobWrappedKey) {
+      const bobKey = await Crypto.unwrapKeyWithPGP(bobWrappedKey, users.bob.privateKeyArmored);
+      const bobDecrypted = await Crypto.decryptDocument(currentDocument.encrypted, currentDocument.iv, bobKey);
+      el('bob-content').innerHTML = `
+        <div class="success">✓ Can access document:</div>
+        <strong>"${bobDecrypted.title}"</strong><br>
+        ${bobDecrypted.text}<br>
+        <small>By ${bobDecrypted.author} at ${new Date(bobDecrypted.createdAt).toLocaleString()}</small>
+      `;
+    }
+    
+    // Charlie's view
+    const charlieWrappedKey = currentDocument.wrappedKeys.find(w => w.userId === 'charlie')?.wrappedKey;
+    if (charlieWrappedKey) {
+      const charlieKey = await Crypto.unwrapKeyWithPGP(charlieWrappedKey, users.charlie.privateKeyArmored);
+      const charlieDecrypted = await Crypto.decryptDocument(currentDocument.encrypted, currentDocument.iv, charlieKey);
+      el('charlie-content').innerHTML = `
+        <div class="success">✓ Can access document:</div>
+        <strong>"${charlieDecrypted.title}"</strong><br>
+        ${charlieDecrypted.text}<br>
+        <small>By ${charlieDecrypted.author} at ${new Date(charlieDecrypted.createdAt).toLocaleString()}</small>
+      `;
+    } else {
+      el('charlie-content').innerHTML = '<div class="error">✗ Access revoked</div>';
+    }
+  } catch (error) {
+    console.error('Error updating recipients view:', error);
+  }
+}
+
+async function revokeCharlieAccess() {
+  if (!currentDocument) return;
+  
+  try {
+    // Remove Charlie's wrapped key
+    currentDocument.wrappedKeys = currentDocument.wrappedKeys.filter(w => w.userId !== 'charlie');
+    
+    // In a real implementation, you would also rotate the document key for security
+    // For this demo, we just remove the wrapped key
+    
+    await updateRecipientsView();
+    updateDocumentsList();
+    
+    console.log("Charlie's access revoked");
+  } catch (error) {
+    console.error('Error revoking access:', error);
+  }
+}
+
+async function addDavidToSharing() {
+  if (!currentDocument) return;
+  
+  try {
+    // Wrap key for David using Bob's key (re-wrapping scenario)
+    const bobWrappedKey = currentDocument.wrappedKeys.find(w => w.userId === 'bob')?.wrappedKey;
+    if (!bobWrappedKey) throw new Error('Bob no longer has access');
+    
+    // Unwrap with Bob's key, then wrap for David
+    const documentKey = await Crypto.unwrapKeyWithPGP(bobWrappedKey, users.bob.privateKeyArmored);
+    const davidWrappedKeys = await Crypto.wrapKeyForMultipleRecipients(documentKey, [
+      { userId: 'david', publicKeyArmored: users.david.publicKeyArmored }
+    ]);
+    
+    // Add David's wrapped key
+    currentDocument.wrappedKeys.push(...davidWrappedKeys);
+    
+    // Update David's panel
+    const davidKey = await Crypto.unwrapKeyWithPGP(davidWrappedKeys[0].wrappedKey, users.david.privateKeyArmored);
+    const davidDecrypted = await Crypto.decryptDocument(currentDocument.encrypted, currentDocument.iv, davidKey);
+    
+    // Add David's panel if it doesn't exist
+    let davidPanel = document.getElementById('david-panel');
+    if (!davidPanel) {
+      davidPanel = document.createElement('div');
+      davidPanel.id = 'david-panel';
+      davidPanel.className = 'user-panel';
+      davidPanel.innerHTML = `
+        <h3>David (New Recipient)</h3>
+        <div id="david-content"></div>
+        <div id="david-keys" class="keys-info">Public Key: ${users.david.publicKeyArmored.substring(0, 50)}...</div>
+      `;
+      document.querySelector('.user-panels')!.appendChild(davidPanel);
+    }
+    
+    el('david-content').innerHTML = `
+      <div class="success">✓ Can access document:</div>
+      <strong>"${davidDecrypted.title}"</strong><br>
+      ${davidDecrypted.text}<br>
+      <small>By ${davidDecrypted.author} at ${new Date(davidDecrypted.createdAt).toLocaleString()}</small>
+    `;
+    
+    updateDocumentsList();
+    
+    console.log('David added to sharing successfully!');
+  } catch (error) {
+    console.error('Error adding David:', error);
+  }
+}
+
+function updateDocumentsList() {
+  if (!currentDocument) {
+    el('documents-list').innerHTML = '<li>No documents shared yet</li>';
+    return;
+  }
+  
+  const recipients = currentDocument.wrappedKeys.map(w => w.userId).join(', ');
+  el('documents-list').innerHTML = `
+    <li>
+      <strong>${currentDocument.content.title}</strong><br>
+      Content: "${currentDocument.content.text}"<br>
+      Author: ${currentDocument.content.author}<br>
+      Created: ${new Date(currentDocument.content.createdAt).toLocaleString()}<br>
+      Shared with: ${recipients}
+    </li>
+  `;
+}
+
+// Event listeners
+el('alice-create').addEventListener('click', createAndShareDocument);
+el('revoke-charlie').addEventListener('click', revokeCharlieAccess);
+el('add-david').addEventListener('click', addDavidToSharing);
+
+// Initialize the demo
+async function initDemo() {
+  await initializeUsers();
+  updateDocumentsList();
+}
+
+initDemo();
+

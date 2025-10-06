@@ -105,31 +105,132 @@ async function handleKeys(req: functions.https.Request, res: functions.Response,
 
 async function handleBroker(req: functions.https.Request, res: functions.Response, authed: Authed) {
   const body = req.body || {};
+  
   if (req.path.endsWith('/doc-key') && req.method === 'POST') {
     const { collection, docId } = body;
     const kref = `k_${collection}_${docId}`;
-    await db.collection('docKeys').doc(kref).set({ alg: 'aes-gcm-256', createdAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+    await db.collection('docKeys').doc(kref).set({ 
+      alg: 'aes-gcm-256', 
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      collection,
+      docId,
+      projectId: authed.projectId
+    }, { merge: true });
     await recordUsage(authed.projectId, 'cloud_call', 1);
     return res.json({ kref });
   }
+  
   if (req.path.endsWith('/grant') && req.method === 'POST') {
-    const { kref, recipientUserId } = body;
-    await db.collection('docKeys').doc(kref).set({ [`wrapped.${recipientUserId}`]: 'WRAPPED_KEY_PLACEHOLDER' }, { merge: true });
+    const { kref, recipientUserId, wrappedKey } = body;
+    if (!wrappedKey) {
+      return res.status(400).json({ error: 'wrappedKey is required' });
+    }
+    
+    // Store the wrapped key for the recipient
+    await db.collection('docKeys').doc(kref).set({ 
+      [`wrapped.${recipientUserId}`]: wrappedKey,
+      [`grantedAt.${recipientUserId}`]: admin.firestore.FieldValue.serverTimestamp()
+    }, { merge: true });
+    
+    // Log the sharing event for audit
+    await db.collection('audit').doc(`${authed.projectId}_${new Date().toISOString().slice(0, 10)}`)
+      .collection('events').add({
+        projectId: authed.projectId,
+        type: 'key_granted',
+        kref,
+        recipientUserId,
+        ts: Date.now(),
+        sig: 'SIGNATURE_PLACEHOLDER'
+      });
+    
     await recordUsage(authed.projectId, 'cloud_call', 1);
     return res.status(204).end();
   }
+  
   if (req.path.endsWith('/revoke') && req.method === 'POST') {
     const { kref, userId } = body;
-    await db.collection('docKeys').doc(kref).set({ [`wrapped.${userId}`]: admin.firestore.FieldValue.delete() }, { merge: true });
+    await db.collection('docKeys').doc(kref).set({ 
+      [`wrapped.${userId}`]: admin.firestore.FieldValue.delete(),
+      [`revokedAt.${userId}`]: admin.firestore.FieldValue.serverTimestamp()
+    }, { merge: true });
+    
+    // Log the revocation event for audit
+    await db.collection('audit').doc(`${authed.projectId}_${new Date().toISOString().slice(0, 10)}`)
+      .collection('events').add({
+        projectId: authed.projectId,
+        type: 'key_revoked',
+        kref,
+        userId,
+        ts: Date.now(),
+        sig: 'SIGNATURE_PLACEHOLDER'
+      });
+    
     await recordUsage(authed.projectId, 'cloud_call', 1);
     return res.status(204).end();
   }
+  
   if (req.path.endsWith('/rotate') && req.method === 'POST') {
     const { kref } = body;
-    await db.collection('docKeys').doc(kref).set({ rotatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+    await db.collection('docKeys').doc(kref).set({ 
+      rotatedAt: admin.firestore.FieldValue.serverTimestamp() 
+    }, { merge: true });
+    
+    // Log the rotation event for audit
+    await db.collection('audit').doc(`${authed.projectId}_${new Date().toISOString().slice(0, 10)}`)
+      .collection('events').add({
+        projectId: authed.projectId,
+        type: 'key_rotated',
+        kref,
+        ts: Date.now(),
+        sig: 'SIGNATURE_PLACEHOLDER'
+      });
+    
     await recordUsage(authed.projectId, 'cloud_call', 1);
     return res.status(204).end();
   }
+  
+  if (req.path.endsWith('/get-wrapped-key') && req.method === 'POST') {
+    const { collection, docId, userId } = body;
+    const kref = `k_${collection}_${docId}`;
+    const doc = await db.collection('docKeys').doc(kref).get();
+    
+    if (!doc.exists) {
+      return res.status(404).json({ error: 'Document key not found' });
+    }
+    
+    const data = doc.data();
+    const wrappedKey = data?.wrapped?.[userId];
+    
+    if (!wrappedKey) {
+      return res.status(404).json({ error: 'Wrapped key not found for user' });
+    }
+    
+    await recordUsage(authed.projectId, 'cloud_call', 1);
+    return res.json({ wrappedKey });
+  }
+  
+  if (req.path.endsWith('/list-recipients') && req.method === 'POST') {
+    const { collection, docId } = body;
+    const kref = `k_${collection}_${docId}`;
+    const doc = await db.collection('docKeys').doc(kref).get();
+    
+    if (!doc.exists) {
+      return res.status(404).json({ error: 'Document key not found' });
+    }
+    
+    const data = doc.data();
+    const wrapped = data?.wrapped || {};
+    const grantedAt = data?.grantedAt || {};
+    
+    const recipients = Object.keys(wrapped).map(userId => ({
+      userId,
+      grantedAt: grantedAt[userId]?.toDate?.()?.toISOString() || new Date().toISOString()
+    }));
+    
+    await recordUsage(authed.projectId, 'cloud_call', 1);
+    return res.json({ recipients });
+  }
+  
   return res.status(404).json({ error: 'not found' });
 }
 
