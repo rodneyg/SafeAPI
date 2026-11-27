@@ -11,6 +11,11 @@ const corsHandler = cors({ origin: true });
 
 type Authed = { projectId: string };
 
+async function brokerKeyBelongsToProject(kref: string, projectId: string): Promise<boolean> {
+  const key = await db.collection('docKeys').doc(kref).get();
+  return key.exists && key.data()?.projectId === projectId;
+}
+
 async function recordUsage(projectId: string, feature: string, inc = 1) {
   const ts = admin.firestore.Timestamp.now();
   await db.collection('usage_events').add({ projectId, feature, inc, ts });
@@ -107,20 +112,61 @@ async function handleBroker(req: functions.https.Request, res: functions.Respons
   const body = req.body || {};
   if (req.path.endsWith('/doc-key') && req.method === 'POST') {
     const { collection, docId } = body;
+    if (typeof collection !== 'string' || !collection || typeof docId !== 'string' || !docId) {
+      return res.status(400).json({ error: 'collection and docId are required' });
+    }
     const kref = `k_${collection}_${docId}`;
-    await db.collection('docKeys').doc(kref).set({ alg: 'aes-gcm-256', createdAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+    const ref = db.collection('docKeys').doc(kref);
+    const existing = await ref.get();
+    if (existing.exists && existing.data()?.projectId !== authed.projectId) {
+      return res.status(403).json({ error: 'document key belongs to another project' });
+    }
+    await ref.set({ alg: 'aes-gcm-256', projectId: authed.projectId, createdAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
     await recordUsage(authed.projectId, 'cloud_call', 1);
     return res.json({ kref });
   }
   if (req.path.endsWith('/grant') && req.method === 'POST') {
-    const { kref, recipientUserId } = body;
-    await db.collection('docKeys').doc(kref).set({ [`wrapped.${recipientUserId}`]: 'WRAPPED_KEY_PLACEHOLDER' }, { merge: true });
+    const { kref, recipientUserId, wrappedKey } = body;
+    if (typeof kref !== 'string' || !kref || typeof recipientUserId !== 'string' || !recipientUserId) {
+      return res.status(400).json({ error: 'kref and recipientUserId are required' });
+    }
+    if (typeof wrappedKey !== 'string' || !wrappedKey.startsWith('-----BEGIN PGP MESSAGE-----')) {
+      return res.status(400).json({ error: 'wrappedKey must be an armored OpenPGP message' });
+    }
+    if (!await brokerKeyBelongsToProject(kref, authed.projectId)) {
+      return res.status(404).json({ error: 'document key not found' });
+    }
+    // Store only ciphertext. The broker never receives or unwraps the AES document key.
+    await db.collection('docKeys').doc(kref).collection('recipients').doc(recipientUserId).set({
+      wrappedKey,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
     await recordUsage(authed.projectId, 'cloud_call', 1);
     return res.status(204).end();
   }
+  if (req.path.endsWith('/wrapped-key') && req.method === 'GET') {
+    const kref = req.query.kref;
+    const recipientUserId = req.query.recipientUserId;
+    if (typeof kref !== 'string' || !kref || typeof recipientUserId !== 'string' || !recipientUserId) {
+      return res.status(400).json({ error: 'kref and recipientUserId are required' });
+    }
+    if (!await brokerKeyBelongsToProject(kref, authed.projectId)) {
+      return res.status(404).json({ error: 'document key not found' });
+    }
+    const grant = await db.collection('docKeys').doc(kref).collection('recipients').doc(recipientUserId).get();
+    if (!grant.exists) return res.status(404).json({ error: 'wrapped key not found' });
+    await recordUsage(authed.projectId, 'cloud_call', 1);
+    return res.json({ wrappedKey: grant.data()?.wrappedKey });
+  }
   if (req.path.endsWith('/revoke') && req.method === 'POST') {
     const { kref, userId } = body;
-    await db.collection('docKeys').doc(kref).set({ [`wrapped.${userId}`]: admin.firestore.FieldValue.delete() }, { merge: true });
+    if (typeof kref !== 'string' || !kref || typeof userId !== 'string' || !userId) {
+      return res.status(400).json({ error: 'kref and userId are required' });
+    }
+    if (!await brokerKeyBelongsToProject(kref, authed.projectId)) {
+      return res.status(404).json({ error: 'document key not found' });
+    }
+    await db.collection('docKeys').doc(kref).collection('recipients').doc(userId).delete();
     await recordUsage(authed.projectId, 'cloud_call', 1);
     return res.status(204).end();
   }

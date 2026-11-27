@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { decryptJsonAesGcm, encryptJsonAesGcm, generateKeyPair, keyUnwrap, keyWrap } from '../src/crypto/openpgp';
+import { decryptJsonAesGcm, encryptJsonAesGcm, generateKeyPair, keyUnwrap, keyWrap, reWrapKeyForRecipients, wrapKeyForRecipients } from '../src/crypto/openpgp';
 
 describe('crypto roundtrip', () => {
   it('wraps an AES-GCM key for a recipient and unwraps it in a browser-safe binary format', async () => {
@@ -16,6 +16,27 @@ describe('crypto roundtrip', () => {
     const { encrypted, key } = await encryptJsonAesGcm(input);
     const out = await decryptJsonAesGcm(encrypted, key);
     expect(out).toEqual(input);
+  });
+
+  it('wraps keys for multiple recipients and lets a recipient re-wrap for another user', async () => {
+    const alice = await generateKeyPair('alice');
+    const bob = await generateKeyPair('bob');
+    const charlie = await generateKeyPair('charlie');
+    const { key, encrypted } = await encryptJsonAesGcm({ shared: 'secret' });
+
+    const initial = await wrapKeyForRecipients(key, [
+      { userId: 'bob', publicKeyArmored: bob.publicKeyArmored },
+    ]);
+    expect(initial).toHaveLength(1);
+    const rewrapped = await reWrapKeyForRecipients(
+      initial[0].wrappedKey,
+      bob.privateKeyArmored,
+      [{ userId: 'charlie', publicKeyArmored: charlie.publicKeyArmored }],
+    );
+    const charlieKey = await keyUnwrap(rewrapped[0].wrappedKey, charlie.privateKeyArmored);
+    await expect(decryptJsonAesGcm(encrypted, charlieKey)).resolves.toEqual({ shared: 'secret' });
+
+    await expect(keyUnwrap(initial[0].wrappedKey, alice.privateKeyArmored)).rejects.toThrow();
   });
 });
 

@@ -49,10 +49,34 @@ export async function unwrapKeyWithPGP(wrappedArmored: string, privateKeyArmored
   const message = await openpgp.readMessage({ armoredMessage: wrappedArmored });
   const { data } = await openpgp.decrypt({ message, decryptionKeys: privateKey, format: 'binary' });
   const rawBytes = data as Uint8Array;
+  if (![16, 24, 32].includes(rawBytes.byteLength)) {
+    throw new Error(`Invalid AES key length: ${rawBytes.byteLength} bytes`);
+  }
   const raw = new ArrayBuffer(rawBytes.byteLength);
   new Uint8Array(raw).set(rawBytes);
   const key = await crypto.subtle.importKey('raw', raw, { name: 'AES-GCM' }, true, ['encrypt', 'decrypt']);
   return key;
+}
+
+/** Wrap one document key for each recipient. The server only receives armored ciphertext. */
+export async function wrapKeyForRecipients(
+  aesKey: CryptoKey,
+  recipients: Array<{ userId: string; publicKeyArmored: string }>,
+): Promise<Array<{ userId: string; wrappedKey: string }>> {
+  return Promise.all(recipients.map(async ({ userId, publicKeyArmored }) => ({
+    userId,
+    wrappedKey: await wrapKeyWithPGP(aesKey, publicKeyArmored),
+  })));
+}
+
+/** Re-wrap a recipient-held key for additional users without exposing it to the broker. */
+export async function reWrapKeyForRecipients(
+  existingWrappedKey: string,
+  currentRecipientPrivateKeyArmored: string,
+  recipients: Array<{ userId: string; publicKeyArmored: string }>,
+): Promise<Array<{ userId: string; wrappedKey: string }>> {
+  const aesKey = await unwrapKeyWithPGP(existingWrappedKey, currentRecipientPrivateKeyArmored);
+  return wrapKeyForRecipients(aesKey, recipients);
 }
 
 
