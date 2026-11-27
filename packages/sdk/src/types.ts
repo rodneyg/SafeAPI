@@ -20,3 +20,14 @@ export interface KeyPair {
   privateKeyArmored: string;
 }
 
+/** A consent decision stored in the cloud consent history. */
+export interface ConsentRecord {
+  subjectId: string;
+  type: string;
+  granted: boolean;
+  method?: string;
+  ts: number;
+  sig: string;
+  projectId: string;
+}
+
