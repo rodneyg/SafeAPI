@@ -2,6 +2,7 @@ import * as functions from 'firebase-functions';
 import * as admin from 'firebase-admin';
 import jwt from 'jsonwebtoken';
 import cors from 'cors';
+import { handleEscrowError, validateEscrowInput } from './key-escrow-errors';
 
 admin.initializeApp();
 const db = admin.firestore();
@@ -90,15 +91,33 @@ async function handleKeys(req: functions.https.Request, res: functions.Response,
   }
   if (path.endsWith('/escrow') && req.method === 'POST') {
     const { userId, encPrivKey } = body;
-    await db.collection('escrow').doc(userId).set({ encPrivKey, createdAt: admin.firestore.FieldValue.serverTimestamp() });
-    await recordUsage(authed.projectId, 'cloud_call', 1);
-    return res.status(204).end();
+    const invalidInput = validateEscrowInput(userId, encPrivKey);
+    if (invalidInput) return res.status(400).json(invalidInput);
+
+    try {
+      await db.collection('escrow').doc(userId).set({ encPrivKey, createdAt: admin.firestore.FieldValue.serverTimestamp() });
+      await recordUsage(authed.projectId, 'cloud_call', 1);
+      return res.status(204).end();
+    } catch (error) {
+      const code = error && typeof error === 'object' && 'code' in error ? error.code : undefined;
+      console.error('Key escrow storage failed', { code });
+      return handleEscrowError(res, error, 'store');
+    }
   }
   if (path.endsWith('/recover') && req.method === 'POST') {
     const { userId } = body;
-    const doc = await db.collection('escrow').doc(userId).get();
-    await recordUsage(authed.projectId, 'cloud_call', 1);
-    return res.json({ encPrivKey: doc.data()?.encPrivKey || null });
+    const invalidInput = validateEscrowInput(userId);
+    if (invalidInput) return res.status(400).json(invalidInput);
+
+    try {
+      const doc = await db.collection('escrow').doc(userId).get();
+      await recordUsage(authed.projectId, 'cloud_call', 1);
+      return res.json({ encPrivKey: doc.data()?.encPrivKey || null });
+    } catch (error) {
+      const code = error && typeof error === 'object' && 'code' in error ? error.code : undefined;
+      console.error('Key escrow recovery failed', { code });
+      return handleEscrowError(res, error, 'recover');
+    }
   }
   return res.status(404).json({ error: 'not found' });
 }
