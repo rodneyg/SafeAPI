@@ -1,9 +1,14 @@
 import { describe, it, expect } from 'vitest';
-import { AES_GCM_ALGORITHM, decryptBytesAesGcm, decryptJsonAesGcm, encryptBytesAesGcm, encryptJsonAesGcm, generateKeyPair, keyUnwrap, keyWrap, reWrapKeyForRecipients, signBytes, verifyBytes, wrapKeyForRecipients } from '../src/crypto/openpgp';
+import { AES_GCM_ALGORITHM, decryptBytesAesGcm, decryptJsonAesGcm, encryptBytesAesGcm, encryptJsonAesGcm, generateKeyPair, keyUnwrap, keyWrap, reWrapKeyForRecipients, signBytes, verifyBytes, wrapKeyForRecipients, type DocumentEncryptionParams } from '../src/crypto/openpgp';
 
 describe('crypto roundtrip', () => {
   it('uses the shared AES-GCM algorithm constant', () => {
     expect(AES_GCM_ALGORITHM).toBe('AES-GCM');
+  });
+
+  it('accepts typed document encryption parameters', () => {
+    const params: DocumentEncryptionParams = { contentType: 'application/json', metadata: { source: 'test' } };
+    expect(params).toEqual({ contentType: 'application/json', metadata: { source: 'test' } });
   });
 
   it('wraps an AES-GCM key for a recipient and unwraps it in a browser-safe binary format', async () => {
@@ -11,7 +16,6 @@ describe('crypto roundtrip', () => {
     const { key, encrypted } = await encryptJsonAesGcm({ shared: 'secret' });
     const wrapped = await keyWrap(key, recipient.publicKeyArmored);
     const unwrapped = await keyUnwrap(wrapped, recipient.privateKeyArmored);
-
     await expect(decryptJsonAesGcm(encrypted, unwrapped)).resolves.toEqual({ shared: 'secret' });
   });
 

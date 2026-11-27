@@ -15,35 +15,38 @@ const ui = `
 
 document.getElementById('app')!.innerHTML = ui;
 
-const api = new SafeAPI({ storage: new FilesAdapter(), defaults: { encryption: 'document' } });
-await api.init();
+async function startPlayground() {
+  const api = new SafeAPI({ storage: new FilesAdapter(), defaults: { encryption: 'document' } });
+  await api.init();
 
-const notesIndex: string[] = [];
+  const notesIndex: string[] = [];
 
-async function render() {
-  const list = el('list');
-  list.innerHTML = '';
-  for (const id of notesIndex) {
-    const li = document.createElement('li');
-    li.textContent = 'decrypting...';
-    list.appendChild(li);
-    try {
-      const doc = await api.data.get<{ text: string; createdAt: number }>({ collection: 'notes', id });
-      li.textContent = `${new Date(doc!.createdAt).toLocaleTimeString()}: ${doc!.text}`;
-    } catch (e) {
-      li.textContent = `Error decrypting: ${String(e)}`;
+  async function render() {
+    const list = el('list');
+    list.innerHTML = '';
+    for (const id of notesIndex) {
+      const li = document.createElement('li');
+      li.textContent = 'decrypting...';
+      list.appendChild(li);
+      try {
+        const doc = await api.data.get<{ text: string; createdAt: number }>({ collection: 'notes', id });
+        li.textContent = `${new Date(doc!.createdAt).toLocaleTimeString()}: ${doc!.text}`;
+      } catch (e) {
+        li.textContent = `Error decrypting: ${String(e)}`;
+      }
     }
   }
+
+  el('save').addEventListener('click', async () => {
+    const text = (el('note') as HTMLTextAreaElement).value.trim();
+    if (!text) return;
+    const id = await api.data.create({ collection: 'notes', doc: { text, createdAt: Date.now() } });
+    notesIndex.unshift(id);
+    (el('note') as HTMLTextAreaElement).value = '';
+    await render();
+  });
+
+  await render();
 }
 
-el('save').addEventListener('click', async () => {
-  const text = (el('note') as HTMLTextAreaElement).value.trim();
-  if (!text) return;
-  const id = await api.data.create({ collection: 'notes', doc: { text, createdAt: Date.now() } });
-  notesIndex.unshift(id);
-  (el('note') as HTMLTextAreaElement).value = '';
-  await render();
-});
-
-render();
-
+void startPlayground();

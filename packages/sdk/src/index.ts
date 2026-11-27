@@ -8,6 +8,7 @@ if (typeof process !== 'undefined' && process.versions && process.versions.node)
 }
 
 export type { ConsentRecord, EncryptionMode, SafeAPIConfig, StorageAdapter } from './types';
+export type { DocumentEncryptionParams } from './crypto/openpgp';
 export { SafeAPI } from './core/SafeAPI';
 export { FilesAdapter } from './adapters/FilesAdapter';
 export { FirebaseAdapter } from './adapters/FirebaseAdapter';

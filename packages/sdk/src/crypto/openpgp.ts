@@ -6,6 +6,11 @@ import * as openpgp from 'openpgp';
 
 export const AES_GCM_ALGORITHM = 'AES-GCM';
 
+export interface DocumentEncryptionParams {
+  contentType?: string;
+  metadata?: Record<string, unknown>;
+}
+
 export async function generateKeyPair(userId = 'user') {
   const { privateKey, publicKey } = await openpgp.generateKey({
     type: 'ecc',
@@ -55,7 +60,8 @@ export async function decryptBytesAesGcm(ciphertext: Uint8Array, key: CryptoKey,
 }
 
 // AES-GCM JSON encrypt/decrypt (UTF-8 JSON)
-export async function encryptJsonAesGcm(obj: any, key?: CryptoKey) {
+export async function encryptJsonAesGcm(obj: any, key?: CryptoKey, params?: DocumentEncryptionParams) {
+  void params;
   const data = new TextEncoder().encode(JSON.stringify(obj));
   const k = key || (await crypto.subtle.generateKey({ name: AES_GCM_ALGORITHM, length: 256 }, true, ['encrypt', 'decrypt']));
   const iv = crypto.getRandomValues(new Uint8Array(12));
