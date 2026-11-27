@@ -1,6 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { decryptJsonAesGcm, encryptJsonAesGcm, generateKeyPair, keyUnwrap, keyWrap, reWrapKeyForRecipients, wrapKeyForRecipients } from '../src/crypto/openpgp';
-import { decryptBytesAesGcm, decryptJsonAesGcm, encryptBytesAesGcm, encryptJsonAesGcm, generateKeyPair, signBytes, verifyBytes } from '../src/crypto/openpgp';
+import { decryptBytesAesGcm, decryptJsonAesGcm, encryptBytesAesGcm, encryptJsonAesGcm, generateKeyPair, keyUnwrap, keyWrap, reWrapKeyForRecipients, signBytes, verifyBytes, wrapKeyForRecipients } from '../src/crypto/openpgp';
 
 describe('crypto roundtrip', () => {
   it('wraps an AES-GCM key for a recipient and unwraps it in a browser-safe binary format', async () => {
