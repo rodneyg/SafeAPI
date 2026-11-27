@@ -6,13 +6,16 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "serve": "firebase emulators:start",
-    "deploy": "firebase deploy --only functions,hosting,firestore:indexes,firestore:rules"
+    "deploy": "firebase deploy --only functions,hosting,firestore:indexes,firestore:rules",
+    "lint": "node ../../../tools/check-no-url-secrets.mjs src/index.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
     "firebase-admin": "^12.5.0",
     "firebase-functions": "^5.0.1",
     "jsonwebtoken": "^9.0.2",
-    "cors": "^2.8.5"
+    "cors": "^2.8.5",
+    "openpgp": "^5.11.1"
   },
   "devDependencies": {
     "typescript": "^5.4.5"

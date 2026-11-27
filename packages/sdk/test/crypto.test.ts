@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { decryptJsonAesGcm, encryptJsonAesGcm, generateKeyPair, keyUnwrap, keyWrap, reWrapKeyForRecipients, wrapKeyForRecipients } from '../src/crypto/openpgp';
+import { decryptBytesAesGcm, decryptJsonAesGcm, encryptBytesAesGcm, encryptJsonAesGcm, generateKeyPair, signBytes, verifyBytes } from '../src/crypto/openpgp';
 
 describe('crypto roundtrip', () => {
   it('wraps an AES-GCM key for a recipient and unwraps it in a browser-safe binary format', async () => {
@@ -37,6 +38,24 @@ describe('crypto roundtrip', () => {
     await expect(decryptJsonAesGcm(encrypted, charlieKey)).resolves.toEqual({ shared: 'secret' });
 
     await expect(keyUnwrap(initial[0].wrappedKey, alice.privateKeyArmored)).rejects.toThrow();
+  });
+
+  it('AES-GCM byte roundtrip preserves exact bytes', async () => {
+    const input = new Uint8Array([0, 1, 2, 255]);
+    const { ciphertext, key, iv } = await encryptBytesAesGcm(input);
+    expect(await decryptBytesAesGcm(ciphertext, key, iv)).toEqual(input);
+  });
+
+  it('signs and verifies exact bytes with an OpenPGP key', async () => {
+    const keys = await generateKeyPair('test signer');
+    const payload = new TextEncoder().encode('exact payload');
+    const signature = await signBytes(payload, keys.privateKeyArmored);
+    await expect(verifyBytes(payload, signature, keys.publicKeyArmored)).resolves.toBe(true);
+    await expect(verifyBytes(new TextEncoder().encode('changed'), signature, keys.publicKeyArmored)).resolves.toBe(false);
+    const decoded = Buffer.from(signature, 'utf8');
+    decoded[Math.floor(decoded.length / 2)] ^= 1;
+    const corrupted = decoded.toString('utf8');
+    await expect(verifyBytes(payload, corrupted, keys.publicKeyArmored)).resolves.toBe(false);
   });
 });
 

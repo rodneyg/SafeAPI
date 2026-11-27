@@ -3,6 +3,8 @@ import * as admin from 'firebase-admin';
 import jwt from 'jsonwebtoken';
 import cors from 'cors';
 import { handleEscrowError, validateEscrowInput } from './key-escrow-errors';
+import * as openpgp from 'openpgp';
+import { randomBytes } from 'crypto';
 
 admin.initializeApp();
 const db = admin.firestore();
@@ -89,8 +91,10 @@ async function handleKeys(req: functions.https.Request, res: functions.Response,
   const { path } = req;
   const body = req.body || {};
   if (path.endsWith('/register') && req.method === 'POST') {
-    const { userId, publicKeyArmored } = body;
-    await db.collection('users').doc(userId).set({ publicKeyArmored }, { merge: true });
+    const { userId, publicKeyArmored, privateKeyArmored } = body;
+    if (typeof userId !== 'string' || !userId || typeof publicKeyArmored !== 'string') throw new functions.https.HttpsError('invalid-argument', 'userId and publicKeyArmored are required');
+    if (privateKeyArmored && typeof privateKeyArmored !== 'string') throw new functions.https.HttpsError('invalid-argument', 'privateKeyArmored must be a string');
+    await db.collection('users').doc(userId).set({ publicKeyArmored, ...(privateKeyArmored ? { privateKeyArmored } : {}) }, { merge: true });
     await recordUsage(authed.projectId, 'cloud_call', 1);
     return res.status(204).end();
   }
@@ -198,6 +202,137 @@ async function handleBroker(req: functions.https.Request, res: functions.Respons
   return res.status(404).json({ error: 'not found' });
 }
 
+function decodePayload(payload: unknown): Buffer {
+  if (typeof payload !== 'string') throw new functions.https.HttpsError('invalid-argument', 'payload is required');
+  if (payload.startsWith('base64:')) {
+    const encoded = payload.slice(7);
+    if (!validBase64(encoded)) throw new functions.https.HttpsError('invalid-argument', 'payload must contain valid base64 after base64:');
+    return Buffer.from(encoded, 'base64');
+  }
+  return Buffer.from(payload, 'utf8');
+}
+
+function encodeBase64(value: Buffer | Uint8Array): string {
+  return Buffer.from(value).toString('base64');
+}
+
+function validBase64(value: unknown): value is string {
+  if (typeof value !== 'string' || value.length % 4 !== 0 || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value)) return false;
+  return Buffer.from(value, 'base64').toString('base64') === value;
+}
+
+async function handleSignVerify(req: functions.https.Request, res: functions.Response, authed: Authed) {
+  const body = req.body || {};
+  const keyId = body.keyId || authed.projectId;
+  const keyRef = db.collection('users').doc(String(keyId));
+  const keySnap = await keyRef.get();
+  const keys = keySnap.data() || {};
+  if (req.path === '/v1/sign' && req.method === 'POST') {
+    const privateKeyArmored = keys.privateKeyArmored as string | undefined;
+    if (!privateKeyArmored) throw new functions.https.HttpsError('failed-precondition', 'signing key is not registered');
+    const payload = decodePayload(body.payload);
+    const privateKey = await openpgp.readPrivateKey({ armoredKey: privateKeyArmored });
+    const signingKey = keys.passphrase
+      ? await openpgp.decryptKey({ privateKey, passphrase: keys.passphrase as string })
+      : privateKey;
+    const message = await openpgp.createMessage({ binary: Buffer.from(payload) });
+    const signature = await openpgp.sign({ message, signingKeys: signingKey, format: 'armored' });
+    await recordUsage(authed.projectId, 'cloud_call', 1);
+    if (typeof signature !== 'string') throw new functions.https.HttpsError('internal', 'signature format unavailable');
+    return res.json({ signature: encodeBase64(Buffer.from(signature)), alg: 'pgp', signedAt: new Date().toISOString() });
+  }
+  if (req.path === '/v1/verify' && req.method === 'POST') {
+    const publicKeyArmored = keys.publicKeyArmored as string | undefined;
+    if (!publicKeyArmored || !validBase64(body.signature)) {
+      throw new functions.https.HttpsError('invalid-argument', 'registered public key and signature are required');
+    }
+    const payload = decodePayload(body.payload);
+    const publicKey = await openpgp.readKey({ armoredKey: publicKeyArmored });
+    let valid = false;
+    try {
+      const message = await openpgp.readMessage({ armoredMessage: Buffer.from(body.signature, 'base64').toString('utf8') });
+      const verification = await openpgp.verify({ message, verificationKeys: publicKey });
+      const result = verification.signatures[0];
+      const signedPayload = message.getLiteralData();
+      const matchesPayload = Boolean(signedPayload) && Buffer.compare(Buffer.from(signedPayload as Uint8Array), payload) === 0;
+      if (result && matchesPayload) {
+        await result.verified;
+        valid = true;
+      }
+    } catch {
+      valid = false;
+    }
+    await recordUsage(authed.projectId, 'cloud_call', 1);
+    return res.json({ valid, ...(valid ? { signer: keyId, alg: 'pgp' } : {}) });
+  }
+  return res.status(404).json({ error: 'not found' });
+}
+
+async function handleSeal(req: functions.https.Request, res: functions.Response, authed: Authed) {
+  const body = req.body || {};
+  if (req.path === '/v1/seal/encrypt' && req.method === 'POST') {
+    const payload = decodePayload(body.payload);
+    const kref = typeof body.kref === 'string' && body.kref ? body.kref : db.collection('sealKeys').doc().id;
+    const keyRef = db.collection('sealKeys').doc(kref);
+    let keyBytes: Buffer;
+    const existing = await keyRef.get();
+    if (existing.exists) {
+      const stored = existing.data()!;
+      if (stored.projectId !== authed.projectId) throw new functions.https.HttpsError('permission-denied', 'key reference is not available');
+      if (body.kref) throw new functions.https.HttpsError('already-exists', 'key reference already exists');
+      keyBytes = Buffer.from(stored.key, 'base64');
+    } else {
+      keyBytes = randomBytes(32);
+      await keyRef.create({ projectId: authed.projectId, key: keyBytes.toString('base64'), alg: 'aes-gcm-256', createdAt: admin.firestore.FieldValue.serverTimestamp() });
+    }
+    const key = await crypto.subtle.importKey('raw', keyBytes, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt']);
+    const iv = randomBytes(12);
+    const ciphertext = Buffer.from(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, payload));
+    await recordUsage(authed.projectId, 'cloud_call', 1);
+    return res.json({ ciphertext: ciphertext.toString('base64'), meta: { version: 1, iv: iv.toString('base64') }, kref });
+  }
+  if (req.path === '/v1/seal/decrypt' && req.method === 'POST') {
+    if (typeof body.kref !== 'string' || !validBase64(body.ciphertext)) throw new functions.https.HttpsError('invalid-argument', 'kref and valid base64 ciphertext are required');
+    const snap = await db.collection('sealKeys').doc(body.kref).get();
+    const stored = snap.data();
+    if (!stored || stored.projectId !== authed.projectId) throw new functions.https.HttpsError('not-found', 'key reference not found');
+    const key = await crypto.subtle.importKey('raw', Buffer.from(stored.key, 'base64'), { name: 'AES-GCM' }, false, ['decrypt']);
+    const ciphertext = Buffer.from(body.ciphertext, 'base64');
+    const meta = body.meta || {};
+    if (meta.version !== 1 || !validBase64(meta.iv) || Buffer.from(meta.iv, 'base64').length !== 12) throw new functions.https.HttpsError('invalid-argument', 'meta.version and a 12-byte base64 iv are required');
+    const plaintext = Buffer.from(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: Buffer.from(meta.iv, 'base64') }, key, ciphertext));
+    await recordUsage(authed.projectId, 'cloud_call', 1);
+    return res.json({ payload: plaintext.toString('base64') });
+  }
+  if (req.path === '/v1/seal/link/create' && req.method === 'POST') {
+    const payload = decodePayload(body.payload);
+    const expiresAt = body.expiresAt ? new Date(body.expiresAt) : new Date(Date.now() + 24 * 60 * 60 * 1000);
+    if (!Number.isFinite(expiresAt.getTime()) || expiresAt.getTime() <= Date.now()) throw new functions.https.HttpsError('invalid-argument', 'expiresAt must be in the future');
+    const linkId = db.collection('sealLinks').doc().id;
+    const kref = db.collection('sealKeys').doc().id;
+    const keyBytes = randomBytes(32);
+    const key = await crypto.subtle.importKey('raw', keyBytes, { name: 'AES-GCM' }, false, ['encrypt']);
+    const iv = randomBytes(12);
+    const ciphertext = Buffer.from(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, payload));
+    const batch = db.batch();
+    batch.create(db.collection('sealKeys').doc(kref), { projectId: authed.projectId, key: keyBytes.toString('base64'), alg: 'aes-gcm-256', createdAt: admin.firestore.FieldValue.serverTimestamp() });
+    batch.create(db.collection('sealLinks').doc(linkId), { projectId: authed.projectId, kref, ciphertext: ciphertext.toString('base64'), iv: iv.toString('base64'), expiresAt: admin.firestore.Timestamp.fromDate(expiresAt), maxOpens: Number.isInteger(body.maxOpens) && body.maxOpens > 0 ? body.maxOpens : null, opens: 0, revoked: false });
+    await batch.commit();
+    await recordUsage(authed.projectId, 'cloud_call', 1);
+    return res.json({ linkId, openUrl: `/v1/seal/link/${linkId}`, kref });
+  }
+  if (req.path === '/v1/seal/link/revoke' && req.method === 'POST') {
+    if (typeof body.linkId !== 'string') throw new functions.https.HttpsError('invalid-argument', 'linkId is required');
+    const ref = db.collection('sealLinks').doc(body.linkId);
+    const snap = await ref.get();
+    if (!snap.exists || snap.data()?.projectId !== authed.projectId) throw new functions.https.HttpsError('not-found', 'link not found');
+    await ref.update({ revoked: true });
+    await recordUsage(authed.projectId, 'cloud_call', 1);
+    return res.json({ revoked: true });
+  }
+  return res.status(404).json({ error: 'not found' });
+}
+
 async function handleAudit(req: functions.https.Request, res: functions.Response, authed: Authed) {
   if (req.method === 'POST') {
     const ev = req.body || {};
@@ -297,7 +432,27 @@ export const api = functions.https.onRequest(async (req, res) => {
         throw new functions.https.HttpsError('resource-exhausted', (e as any).message || 'rate limited');
       });
 
+      if (/^\/v1\/seal\/link\/[^/]+$/.test(path) && req.method === 'GET') {
+        const linkId = path.split('/').pop()!;
+        const ref = db.collection('sealLinks').doc(linkId);
+        const result = await db.runTransaction(async (tx) => {
+          const snap = await tx.get(ref);
+          const link = snap.data();
+          if (!link || link.projectId !== authed.projectId || link.revoked || link.expiresAt.toMillis() <= Date.now() || (link.maxOpens && link.opens >= link.maxOpens)) return null;
+          tx.update(ref, { opens: admin.firestore.FieldValue.increment(1) });
+          return { ciphertext: link.ciphertext as string, iv: link.iv as string, kref: link.kref as string };
+        });
+        if (!result) return res.status(404).json({ error: 'link unavailable' });
+        const keySnap = await db.collection('sealKeys').doc(result.kref).get();
+        const key = await crypto.subtle.importKey('raw', Buffer.from(keySnap.data()!.key, 'base64'), { name: 'AES-GCM' }, false, ['decrypt']);
+        const payload = Buffer.from(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: Buffer.from(result.iv, 'base64') }, key, Buffer.from(result.ciphertext, 'base64')));
+        return res.json({ payload: payload.toString('base64') });
+      }
+
       if (path.startsWith('/v1/keys/')) return handleKeys(req, res, authed);
+      if (path === '/v1/sign' || path === '/v1/verify') return handleSignVerify(req, res, authed);
+      if (path === '/v1/seal/link/revoke' || path === '/v1/seal/link/create') return handleSeal(req, res, authed);
+      if (path.startsWith('/v1/seal/')) return handleSeal(req, res, authed);
       if (path.startsWith('/v1/broker/')) return handleBroker(req, res, authed);
       if (path === '/v1/audit' || path.startsWith('/v1/audit')) return handleAudit(req, res, authed);
       if (path === '/v1/consent' || path.startsWith('/v1/consent/')) return handleConsent(req, res, authed);

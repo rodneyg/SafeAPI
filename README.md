@@ -14,6 +14,22 @@ Foundation scaffold for SafeAPI: TypeScript SDK + Firebase cloud service with ke
 
 ## Quick Start (Local + Emulators)
 
+## Common jobs
+
+### Verify content between users
+
+Register the sender's public key using `/v1/keys/register` and provision its private signing key on the server. Call `/v1/sign` with the exact UTF-8 payload (or `base64:<data>` for exact binary bytes), then give the returned base64 signature and the same payload to `/v1/verify`. The sender opts in by signing; no page content is fetched or canonicalized.
+
+### Make stored app data private
+
+Call `/v1/seal/encrypt` before storing a payload. Keep the returned `ciphertext`, `meta`, and `kref` together. Call `/v1/seal/decrypt` with those values when an authorized app needs the original base64 payload. The service holds the AES-GCM key behind the key reference.
+
+### Share a temporary encrypted link
+
+Call `/v1/seal/link/create` with a payload, optional `expiresAt`, and optional `maxOpens`. Share only the returned opaque `openUrl`; revoke it through `/v1/seal/link/revoke`. The open path requires an authenticated project token and enforces expiry and the open limit.
+
+`/v1/broker/*` remains the access-control layer for document keys. The `/v1/keys/*` endpoints are optional legacy key-management endpoints. Do not put key material or payload secrets in URLs.
+
 Prereqs
 1) Install: `npm i -g firebase-tools pnpm`  2) Login: `firebase login`
 3) Create Firebase project; enable Firestore (Native), Functions, Hosting, Auth (Email/Google), Cloud Scheduler
