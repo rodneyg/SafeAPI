@@ -1,5 +1,14 @@
 import type { StorageAdapter } from '../types';
 
+/**
+ * SupabaseAdapter for SafeAPI storage operations using Supabase (PostgreSQL).
+ *
+ * For audit log queries ordered by timestamp (for example, `ts DESC`),
+ * consider adding an index to the corresponding audit table's timestamp
+ * column. A timestamp index can help Postgres retrieve recent audit records
+ * efficiently as the table grows. Apply the same guidance to consent records
+ * when queries sort those records by timestamp.
+ */
 export class SupabaseAdapter implements StorageAdapter {
   constructor(private opts: { url: string; anonKey: string; tablePrefix?: string }) {}
 
