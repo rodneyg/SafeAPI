@@ -16,6 +16,8 @@
   "scripts": {
     "build": "tsup src/index.ts --dts --format esm",
     "test": "vitest run",
+    "lint": "node ../../tools/check-no-url-secrets.mjs src",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
     "demo:node": "tsx examples/quickstart.ts"
   },
   "dependencies": {

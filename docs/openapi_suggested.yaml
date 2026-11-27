@@ -4,6 +4,7 @@ info:
   description: |
     SafeAPI provides cryptographic primitives, key management, document encryption, 
     audit logging, and consent management via a secure cloud service built on Firebase.
+    Seal = encrypt/decrypt payloads. Broker = who can open. Sign/Verify = authorship when the sender opts in. No secrets in URLs.
     
     ## Authentication
     
@@ -106,7 +107,7 @@ paths:
     post:
       tags: [Key Management]
       summary: Register user public key
-      description: Register a user's OpenPGP public key for encryption and verification
+      description: Optional legacy endpoint. Register a user's OpenPGP public key for encryption and verification.
       requestBody:
         required: true
         content:
@@ -134,7 +135,7 @@ paths:
   /v1/keys/escrow:
     post:
       tags: [Key Management]
-      summary: Store encrypted private key
+      summary: Store encrypted private key (optional legacy endpoint)
       description: Store an encrypted private key for account recovery purposes
       requestBody:
         required: true
@@ -163,7 +164,7 @@ paths:
   /v1/keys/recover:
     post:
       tags: [Key Management]
-      summary: Recover escrowed private key
+      summary: Recover escrowed private key (optional legacy endpoint)
       description: Retrieve previously escrowed encrypted private key
       requestBody:
         required: true
@@ -198,7 +199,7 @@ paths:
 
   /v1/broker/doc-key:
     post:
-      tags: [Document Keys]
+      tags: [Broker]
       summary: Generate document encryption key
       description: Create a new AES-GCM key for document encryption
       requestBody:
@@ -237,7 +238,7 @@ paths:
 
   /v1/broker/grant:
     post:
-      tags: [Document Keys]
+      tags: [Broker]
       summary: Grant key access to user
       description: Wrap document key for a specific user's access
       requestBody:
@@ -266,7 +267,7 @@ paths:
 
   /v1/broker/revoke:
     post:
-      tags: [Document Keys]
+      tags: [Broker]
       summary: Revoke user access
       description: Remove user's access to a document key
       requestBody:
@@ -295,7 +296,7 @@ paths:
 
   /v1/broker/rotate:
     post:
-      tags: [Document Keys]
+      tags: [Broker]
       summary: Mark key as rotated
       description: Mark a document key as rotated for security purposes
       requestBody:
@@ -317,6 +318,208 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '429':
           $ref: '#/components/responses/RateLimited'
+
+  /v1/sign:
+    post:
+      tags: [Sign/Verify]
+      summary: Sign exact payload bytes
+      description: Signs the submitted UTF-8 string, or decoded bytes when payload starts with base64:. Signing keys must be provisioned server-side. Signatures are base64-encoded OpenPGP armored data.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                payload: { type: string, description: UTF-8 text or base64:<data> }
+                keyId: { type: string }
+              required: [payload]
+      responses:
+        '200':
+          description: Signature created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  signature: { type: string, format: byte }
+                  alg: { type: string, enum: [pgp, ed25519] }
+                  signedAt: { type: string, format: date-time }
+                required: [signature, alg, signedAt]
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /v1/verify:
+    post:
+      tags: [Sign/Verify]
+      summary: Verify exact payload bytes
+      description: Verifies the supplied payload against a registered signer key. Signature content is base64-encoded OpenPGP armored data.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                payload: { type: string, description: UTF-8 text or base64:<data> }
+                signature: { type: string, format: byte }
+                keyId: { type: string }
+              required: [payload, signature]
+      responses:
+        '200':
+          description: Verification result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  valid: { type: boolean }
+                  signer: { type: string }
+                  alg: { type: string, enum: [pgp, ed25519] }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /v1/seal/encrypt:
+    post:
+      tags: [Seal]
+      summary: Encrypt a payload
+      description: Uses AES-GCM-256. Keys stay server-side and are addressed by kref.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                payload: { type: string, description: UTF-8 text or base64:<data> }
+                kref: { type: string }
+                recipients: { type: array, items: { type: string }, description: Reserved for Broker grants }
+              required: [payload]
+      responses:
+        '200':
+          description: Ciphertext and key reference
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ciphertext: { type: string, format: byte }
+                  meta:
+                    type: object
+                    properties:
+                      version: { type: integer, enum: [1] }
+                      iv: { type: string, format: byte }
+                    required: [version, iv]
+                  kref: { type: string }
+                required: [ciphertext, meta, kref]
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /v1/seal/decrypt:
+    post:
+      tags: [Seal]
+      summary: Decrypt a payload
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                ciphertext: { type: string, format: byte }
+                meta:
+                  type: object
+                  properties:
+                    version: { type: integer, enum: [1] }
+                    iv: { type: string, format: byte }
+                  required: [version, iv]
+                kref: { type: string }
+              required: [ciphertext, meta, kref]
+      responses:
+        '200':
+          description: Decrypted payload
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  payload: { type: string, format: byte }
+                required: [payload]
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/seal/link/create:
+    post:
+      tags: [Seal]
+      summary: Create an expiring encrypted link
+      description: The link is scoped by its opaque linkId. No key or payload secret is put in the URL.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                payload: { type: string, description: UTF-8 text or base64:<data> }
+                expiresAt: { type: string, format: date-time }
+                maxOpens: { type: integer, minimum: 1 }
+              required: [payload]
+      responses:
+        '200':
+          description: Link created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  linkId: { type: string }
+                  openUrl: { type: string, description: Relative path containing only opaque linkId }
+                  kref: { type: string }
+                required: [linkId, openUrl, kref]
+
+  /v1/seal/link/revoke:
+    post:
+      tags: [Seal]
+      summary: Revoke an encrypted link
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                linkId: { type: string }
+              required: [linkId]
+      responses:
+        '200':
+          description: Link revoked
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { revoked: { type: boolean, enum: [true] } }
+                required: [revoked]
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/seal/link/{linkId}:
+    get:
+      tags: [Seal]
+      summary: Open an encrypted link
+      parameters:
+        - in: path
+          name: linkId
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Link payload, base64 encoded
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { payload: { type: string, format: byte } }
+                required: [payload]
+        '404': { $ref: '#/components/responses/NotFound' }
 
   /v1/audit:
     post:
@@ -791,8 +994,12 @@ tags:
     description: API key exchange and JWT token management
   - name: Key Management
     description: OpenPGP key registration, escrow, and recovery
-  - name: Document Keys
-    description: AES-GCM document encryption key management and sharing
+  - name: Broker
+    description: Access control for who can open a document
+  - name: Sign/Verify
+    description: Optional authorship signatures for exact payload bytes
+  - name: Seal
+    description: Encrypt and decrypt payloads, including temporary links
   - name: Audit
     description: Cryptographically signed audit event logging
   - name: Consent

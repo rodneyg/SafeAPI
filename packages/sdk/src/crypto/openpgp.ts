@@ -13,6 +13,45 @@ export async function generateKeyPair(userId = 'user') {
   return { publicKeyArmored: publicKey, privateKeyArmored: privateKey };
 }
 
+export async function signBytes(data: Uint8Array, privateKeyArmored: string, passphrase?: string): Promise<string> {
+  const privateKey = await openpgp.readPrivateKey({ armoredKey: privateKeyArmored });
+  const signingKey = passphrase
+    ? await openpgp.decryptKey({ privateKey, passphrase })
+    : privateKey;
+  const message = await openpgp.createMessage({ binary: data });
+  return await openpgp.sign({ message, signingKeys: signingKey, format: 'armored' }) as string;
+}
+
+export async function verifyBytes(data: Uint8Array, signature: string, publicKeyArmored: string): Promise<boolean> {
+  const publicKey = await openpgp.readKey({ armoredKey: publicKeyArmored });
+  try {
+    const signedMessage = await openpgp.readMessage({ armoredMessage: signature });
+    const verification = await openpgp.verify({ message: signedMessage, verificationKeys: publicKey });
+    const signatureResult = verification.signatures[0];
+    if (!signatureResult) return false;
+    const literalData = signedMessage.getLiteralData();
+    if (!literalData) return false;
+    const signedBytes = new Uint8Array(literalData as Uint8Array);
+    if (signedBytes.length !== data.length || signedBytes.some((value, index) => value !== data[index])) return false;
+    await signatureResult.verified;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function encryptBytesAesGcm(data: Uint8Array, key?: CryptoKey) {
+  const cryptoKey = key || await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, true, ['encrypt', 'decrypt']);
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const input = Uint8Array.from(data);
+  const ciphertext = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, cryptoKey, input));
+  return { ciphertext, key: cryptoKey, iv };
+}
+
+export async function decryptBytesAesGcm(ciphertext: Uint8Array, key: CryptoKey, iv: Uint8Array) {
+  return new Uint8Array(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: Uint8Array.from(iv) }, key, Uint8Array.from(ciphertext)));
+}
+
 // AES-GCM JSON encrypt/decrypt (UTF-8 JSON)
 export async function encryptJsonAesGcm(obj: any, key?: CryptoKey) {
   const data = new TextEncoder().encode(JSON.stringify(obj));
