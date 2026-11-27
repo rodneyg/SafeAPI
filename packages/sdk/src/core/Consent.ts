@@ -1,4 +1,5 @@
 import type { CloudClient } from '../cloud/client';
+import type { ConsentRecord } from '../types';
 
 export class ConsentCore {
   constructor(private cloud?: CloudClient) {}
@@ -6,7 +7,7 @@ export class ConsentCore {
     if (!this.cloud) return;
     await this.cloud.post('/v1/consent', { type, granted, meta, ts: Date.now() });
   }
-  async history(subjectId: string): Promise<any[]> {
+  async history(subjectId: string): Promise<ConsentRecord[]> {
     if (!this.cloud) return [];
     return this.cloud.get(`/v1/consent/${encodeURIComponent(subjectId)}`);
   }
