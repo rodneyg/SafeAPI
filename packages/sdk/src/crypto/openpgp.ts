@@ -4,6 +4,8 @@
 
 import * as openpgp from 'openpgp';
 
+export const AES_GCM_ALGORITHM = 'AES-GCM';
+
 export async function generateKeyPair(userId = 'user') {
   const { privateKey, publicKey } = await openpgp.generateKey({
     type: 'ecc',
@@ -55,9 +57,9 @@ export async function decryptBytesAesGcm(ciphertext: Uint8Array, key: CryptoKey,
 // AES-GCM JSON encrypt/decrypt (UTF-8 JSON)
 export async function encryptJsonAesGcm(obj: any, key?: CryptoKey) {
   const data = new TextEncoder().encode(JSON.stringify(obj));
-  const k = key || (await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, true, ['encrypt', 'decrypt']));
+  const k = key || (await crypto.subtle.generateKey({ name: AES_GCM_ALGORITHM, length: 256 }, true, ['encrypt', 'decrypt']));
   const iv = crypto.getRandomValues(new Uint8Array(12));
-  const cipher = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, k, data));
+  const cipher = new Uint8Array(await crypto.subtle.encrypt({ name: AES_GCM_ALGORITHM, iv }, k, data));
   // Serialize: [version(1), iv(12), ciphertext]
   const out = new Uint8Array(1 + 12 + cipher.length);
   out[0] = 1; // version
@@ -70,7 +72,7 @@ export async function decryptJsonAesGcm(encrypted: Uint8Array, key: CryptoKey) {
   if (encrypted[0] !== 1) throw new Error('Unsupported version');
   const iv = encrypted.slice(1, 13);
   const cipher = encrypted.slice(13);
-  const plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, cipher);
+  const plain = await crypto.subtle.decrypt({ name: AES_GCM_ALGORITHM, iv }, key, cipher);
   return JSON.parse(new TextDecoder().decode(plain));
 }
 
@@ -93,7 +95,7 @@ export async function unwrapKeyWithPGP(wrappedArmored: string, privateKeyArmored
   }
   const raw = new ArrayBuffer(rawBytes.byteLength);
   new Uint8Array(raw).set(rawBytes);
-  const key = await crypto.subtle.importKey('raw', raw, { name: 'AES-GCM' }, true, ['encrypt', 'decrypt']);
+  const key = await crypto.subtle.importKey('raw', raw, { name: AES_GCM_ALGORITHM }, true, ['encrypt', 'decrypt']);
   return key;
 }
 
