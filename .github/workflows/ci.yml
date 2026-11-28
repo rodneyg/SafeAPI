@@ -23,7 +23,5 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm --filter @safeapi/sdk lint
       - run: pnpm --filter @safeapi/sdk typecheck
-      - run: pnpm --filter @safeapi/sdk test
-      - run: pnpm --filter @safeapi/sdk build
-      - run: pnpm --filter @safeapi/dashboard build
-      - run: pnpm --filter @safeapi/playground build
+      - run: pnpm test
+      - run: pnpm build
